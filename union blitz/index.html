@@ -1,0 +1,276 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Union Blitz</title>
+  <style>
+    body {
+      margin: 0;
+      background: linear-gradient(to right, #1e3c72, #2a5298, #00c6ff);
+      font-family: 'Arial', sans-serif;
+      color: white;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      height: 100vh;
+      overflow: hidden;
+    }
+
+    #startScreen, #gameOverScreen {
+      position: absolute;
+      z-index: 10;
+      text-align: center;
+      background: rgba(0, 0, 0, 0.85);
+      padding: 30px;
+      border-radius: 10px;
+    }
+
+    button {
+      padding: 12px 20px;
+      font-size: 16px;
+      background: #00ffff;
+      border: none;
+      border-radius: 6px;
+      cursor: pointer;
+      color: #000;
+      transition: 0.3s;
+    }
+
+    button:hover {
+      background: #00ccff;
+    }
+
+    canvas {
+      border: 2px solid #fff;
+      background: radial-gradient(circle at top, #111 0%, #000 100%);
+    }
+
+    h1 {
+      margin-bottom: 20px;
+      font-size: 30px;
+      color: #00ffff;
+    }
+
+    #scoreBoard {
+      position: absolute;
+      top: 10px;
+      left: 10px;
+      font-size: 18px;
+      font-weight: bold;
+      text-shadow: 1px 1px 2px black;
+    }
+  </style>
+</head>
+<body>
+
+<!-- AUDIO FILES -->
+<audio id="hitSound" src="/hit.mp3"></audio>
+<audio id="missSound" src="/miss.mp3"></audio>
+
+<div id="startScreen">
+  <h1>Union Blitz</h1>
+  <button id="startButton">Start Game</button>
+</div>
+
+<div id="gameOverScreen" style="display:none;">
+  <h1>Game Over</h1>
+  <p>Your Score: <span id="finalScore">0</span></p>
+  <p>High Score: <span id="highScore">0</span></p>
+  <button id="restartButton">Play Again</button>
+</div>
+
+<canvas id="gameCanvas" width="400" height="600"></canvas>
+<div id="scoreBoard">Score: 0 ❤️❤️❤️</div>
+
+<script>
+  const canvas = document.getElementById("gameCanvas");
+  const ctx = canvas.getContext("2d");
+
+  const startScreen = document.getElementById("startScreen");
+  const gameOverScreen = document.getElementById("gameOverScreen");
+  const startButton = document.getElementById("startButton");
+  const restartButton = document.getElementById("restartButton");
+  const scoreBoard = document.getElementById("scoreBoard");
+  const finalScore = document.getElementById("finalScore");
+  const highScoreDisplay = document.getElementById("highScore");
+
+  const hitSound = document.getElementById("hitSound");
+  const missSound = document.getElementById("missSound");
+
+  const targetImage = new Image();
+  targetImage.src = "/target.jpg"; // ✅ PUBLIC FOLDER
+
+  let score = 0;
+  let lives = 3;
+  let playing = false;
+  let highScore = localStorage.getItem("unionBlitzHighScore") || 0;
+
+  const target = {
+    x: 150,
+    y: 100,
+    width: 45,
+    height: 45,
+    dx: 2.5,
+    dy: 2
+  };
+
+  const ball = {
+    x: canvas.width / 2,
+    y: canvas.height - 30,
+    radius: 10,
+    speed: 6,
+    vx: 0,
+    vy: 0,
+    thrown: false
+  };
+
+  function resetBall() {
+    ball.x = canvas.width / 2;
+    ball.y = canvas.height - 30;
+    ball.vx = 0;
+    ball.vy = 0;
+    ball.thrown = false;
+  }
+
+  function drawBall() {
+    ctx.beginPath();
+    ctx.arc(ball.x, ball.y, ball.radius, 0, Math.PI * 2);
+    ctx.fillStyle = "#00ffff";
+    ctx.shadowColor = "#0ff";
+    ctx.shadowBlur = 10;
+    ctx.fill();
+    ctx.shadowBlur = 0;
+    ctx.closePath();
+  }
+
+  function drawTarget() {
+    if (!targetImage.complete) return;
+    ctx.save();
+    ctx.shadowColor = "#f0f";
+    ctx.shadowBlur = 15;
+    ctx.drawImage(targetImage, target.x, target.y, target.width, target.height);
+    ctx.restore();
+  }
+
+  function update() {
+    if (!playing) return;
+
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+    target.x += target.dx;
+    target.y += target.dy;
+
+    if (target.x < 0 || target.x + target.width > canvas.width) target.dx *= -1;
+    if (target.y < 0 || target.y + target.height > canvas.height / 2) target.dy *= -1;
+
+    if (ball.thrown) {
+      ball.x += ball.vx;
+      ball.y += ball.vy;
+    }
+
+    drawTarget();
+    drawBall();
+    updateScoreBoard();
+    detectHit();
+
+    if (
+      ball.y < 0 ||
+      ball.x < 0 ||
+      ball.x > canvas.width ||
+      ball.y > canvas.height
+    ) {
+      loseLife();
+    }
+
+    requestAnimationFrame(update);
+  }
+
+  function detectHit() {
+    if (
+      ball.x > target.x &&
+      ball.x < target.x + target.width &&
+      ball.y > target.y &&
+      ball.y < target.y + target.height
+    ) {
+      score += 5;
+      target.dx *= 1.1;
+      target.dy *= 1.1;
+      hitSound.play();
+      resetBall();
+    }
+  }
+
+  function loseLife() {
+    lives -= 1;
+    missSound.play();
+    if (lives <= 0) {
+      endGame();
+    } else {
+      resetBall();
+    }
+  }
+
+  function updateScoreBoard() {
+    let hearts = "❤️".repeat(lives);
+    scoreBoard.innerText = `Score: ${score} ${hearts}`;
+  }
+
+  function endGame() {
+    playing = false;
+    finalScore.innerText = score;
+
+    if (score > highScore) {
+      highScore = score;
+      localStorage.setItem("unionBlitzHighScore", highScore);
+    }
+
+    highScoreDisplay.innerText = highScore;
+    gameOverScreen.style.display = "block";
+  }
+
+  function startGame() {
+    startScreen.style.display = "none";
+    gameOverScreen.style.display = "none";
+    score = 0;
+    lives = 3;
+    playing = true;
+    resetBall();
+    target.x = 150;
+    target.y = 100;
+    target.dx = 2.5;
+    target.dy = 2;
+    update();
+  }
+
+  let touchStart = null;
+  canvas.addEventListener("touchstart", (e) => {
+    touchStart = e.touches[0];
+  });
+
+  canvas.addEventListener("touchend", (e) => {
+    if (!touchStart) return;
+    const touchEnd = e.changedTouches[0];
+    const dx = touchEnd.clientX - touchStart.clientX;
+    const dy = touchEnd.clientY - touchStart.clientY;
+    const angle = Math.atan2(dy, dx);
+    ball.vx = ball.speed * Math.cos(angle);
+    ball.vy = ball.speed * Math.sin(angle);
+    ball.thrown = true;
+    touchStart = null;
+  });
+
+  startButton.addEventListener("click", () => {
+    if (targetImage.complete) {
+      startGame();
+    } else {
+      targetImage.onload = startGame;
+    }
+  });
+
+  restartButton.addEventListener("click", startGame);
+</script>
+
+</body>
+</html>
