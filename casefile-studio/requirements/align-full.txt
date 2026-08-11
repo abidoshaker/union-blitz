@@ -1,0 +1,13 @@
+# Optional high-accuracy tier: wav2vec2 forced alignment via WhisperX.
+# Pulls CPU torch + transformers: ~2.5 GB of wheels and a slow install.
+# Only worth it if 100-300 ms caption timing is not tight enough for you.
+#
+# Install with:  install-deps.bat --with-align-full
+#
+# The CPU wheel index keeps this from dragging in multi-GB CUDA packages.
+--extra-index-url https://download.pytorch.org/whl/cpu
+
+torch>=2.2
+torchaudio>=2.2
+transformers>=4.44
+whisperx>=3.3.1

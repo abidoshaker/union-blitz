@@ -1,0 +1,24 @@
+# Local environment produced by install-deps.bat
+.venv/
+.env
+.env.local
+install-log.txt
+
+# Downloaded model weights (~340 MB)
+models/
+*.onnx
+*.bin
+
+# Project working data: databases, assets, scene clips, renders
+data/
+*.db
+*.sqlite3
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Node
+node_modules/
+dist/

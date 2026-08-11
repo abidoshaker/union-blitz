@@ -1,0 +1,15 @@
+# Local, commercially-safe TTS (Kokoro-82M, Apache-2.0) + free cloud fallbacks.
+# ~250 MB of wheels, plus ~350 MB of model files fetched by tools/fetch_models.py.
+# Installed unless you pass --minimal.
+
+onnxruntime>=1.18
+kokoro-onnx>=0.4.0
+
+# Kokoro's grapheme-to-phoneme stack. espeakng-loader ships the espeak-ng
+# data so you do NOT need a separate espeak-ng install on Windows.
+misaki[en]>=0.7.0
+espeakng-loader>=0.2.0
+
+# Free cloud voice, no API key, useful for drafting an hour-long script
+# before spending anything on Fish Audio.
+edge-tts>=6.1
