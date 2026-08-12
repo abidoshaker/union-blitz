@@ -592,12 +592,44 @@ computed from a rolling average of completed units, not a fixed guess.
   Make this prominent in the UI and default the first render of any project to
   it.
 
-### 15.9 Realistic expectations to show the user
-On a modern 8-core CPU with `-preset veryfast`, a 60-minute 1080p Ken Burns
-video lands roughly in the **1–3 hours** range to render, dominated by
-`zoompan`. `tools/doctor.py` prints an estimate scaled to the actual core count
-of the machine; show the same number in the UI before a render starts, and
-never present it as precise.
+### 15.9 Realistic expectations, now measured
+
+These are measurements from this repository, not estimates. Full pipeline,
+offline, draft voice and placeholder stills, on a **4-core** box:
+
+| Script | Words | Scenes | Output | Wall clock |
+|---|---|---|---|---|
+| 15-minute | 2,250 | 51 | 16.5 min | 4.7 min (at 240p) |
+| 60-minute | 9,028 | 208 | 66.1 min | 17.2 min (at 240p) |
+
+A/V drift over the 66-minute render was **0.014 s**. Segmentation, image
+sourcing and narration for the full hour took **19 seconds** combined; the
+render is essentially the whole cost.
+
+Encode cost at production settings (1080p30, veryfast, crf 20, 2× upscale),
+measured per second of finished video:
+
+| Source content | × realtime, 4 cores | Clip bytes |
+|---|---|---|
+| Synthetic gradient | 0.87× | 0.9 MB/min |
+| Photograph (detailed) | 1.93× | 12.3 MB/min |
+| Pure noise (worst case) | 1.85× | 350 MB/min |
+
+So **~6.0 CPU-seconds per second of 1080p video**, spread across the pool. That
+constant lives in `render_service.CPU_SEC_PER_VIDEO_SEC` and drives both the
+preflight estimate and `doctor.py`. The earlier "1–3 hours on 8 cores" figure
+in this spec was a guess and about 2× pessimistic; it has been replaced.
+
+Caveat worth keeping: these runs used placeholder stills. Real photographs cost
+roughly what the "photograph" row shows, and video-backed scenes cost more than
+either. The preflight deliberately reports a range.
+
+### 15.10 Resume, verified
+
+A 51-scene render was killed with `os._exit(9)` at 46% completion with 23 clips
+on disk. On restart the orphaned job was requeued by `_requeue_orphans`, reused
+all 23 clips, rendered the remaining 28, and finished - 193 s against 271 s for
+the same render from cold.
 
 ---
 

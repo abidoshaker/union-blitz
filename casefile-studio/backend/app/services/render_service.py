@@ -409,15 +409,29 @@ def render_shorts(
 # Preflight
 # ---------------------------------------------------------------------------
 
+# Measured on 1080p30 veryfast crf20 with a 2x Ken Burns upscale:
+#   photographic stills   12 MB per minute of finished video
+#   high-motion footage   far more, so this sits above the still-based figure
+# 25 MB/min leaves headroom for video-sourced scenes without demanding a
+# multiple of what the render actually needs.
+MB_PER_MINUTE = 25.0
+# Measured CPU-seconds of work per second of finished 1080p video, summed
+# across workers. Photographic content came in at 5.8; 6.0 is that plus a
+# little. Do not raise this on a hunch - it drives the time shown to the user.
+CPU_SEC_PER_VIDEO_SEC = 6.0
+
+
 def estimate_disk_bytes(scene_count: int, total_sec: float, opts: RenderOpts) -> int:
-    """Clips plus master plus audio, rounded up hard.
+    """Scene clips plus the master plus the audio.
 
     An hour-long render that dies at scene 200 because the drive filled is the
-    worst possible failure, so this is deliberately pessimistic.
+    worst failure this code can produce, so the figure carries headroom - but
+    not so much that it refuses to start on a machine with ample space.
     """
-    megabits_per_sec = 9.0 if opts.crf <= 20 else 6.0
-    clip_bytes = total_sec * megabits_per_sec * 125_000 * 1.35
-    master_bytes = total_sec * megabits_per_sec * 125_000
+    per_minute = MB_PER_MINUTE * (1.0 if opts.crf <= 20 else 0.7)
+    minutes = total_sec / 60.0
+    clip_bytes = minutes * per_minute * 1e6 * 1.35     # clips, plus cache churn
+    master_bytes = minutes * per_minute * 1e6
     audio_bytes = total_sec * 24_000 * 2
     return int(clip_bytes + master_bytes + audio_bytes)
 
@@ -438,16 +452,16 @@ def preflight(scene_count: int, total_sec: float, opts: RenderOpts, target: Path
         )
 
     cores = max(1, settings.render_workers)
-    # Measured on 1080p Ken Burns at veryfast: roughly 8x realtime of CPU work,
-    # spread across the pool. Shown as a range because it is a planning number.
-    cpu_seconds = total_sec * 8.0
+    cpu_seconds = total_sec * CPU_SEC_PER_VIDEO_SEC
     return {
         "ok": not problems,
         "problems": problems,
         "estimated_disk_bytes": needed,
         "free_disk_bytes": free,
-        "estimated_render_sec_low": cpu_seconds / cores * 0.6,
-        "estimated_render_sec_high": cpu_seconds / cores * 2.0,
+        # Range rather than a number: the encode cost depends on how detailed
+        # the imagery is, and video-backed scenes cost more than stills.
+        "estimated_render_sec_low": cpu_seconds / cores * 0.7,
+        "estimated_render_sec_high": cpu_seconds / cores * 1.8,
         "workers": cores,
         "hw_encoders": list(caps.hw_encoders),
     }

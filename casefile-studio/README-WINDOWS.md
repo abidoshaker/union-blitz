@@ -100,14 +100,25 @@ This build is set up for full-length videos, roughly 9,000 words / 60 minutes.
 Two things worth knowing before your first one:
 
 - **Narration is cheap, rendering is not.** An hour of Fish Audio narration is
-  about **$0.78**. Rendering that same hour to 1080p takes roughly **1–3 hours**
-  on a typical 8-core CPU. `doctor.bat` estimates it for your actual machine.
+  about **$0.78** and takes a few minutes. Rendering that same hour to 1080p is
+  the slow part. Measured on photographic stills at 1080p30, preset veryfast:
+
+  | Video length | 4 cores | 8 cores |
+  |---|---|---|
+  | 15 minutes | ~30 min | ~15 min |
+  | 30 minutes | ~1 h | ~30 min |
+  | 60 minutes | ~2 h | ~1 h |
+
+  `doctor.bat` works this out for your actual core count. Video-backed scenes
+  cost more than stills, so treat these as the lower end if you turn clips on.
 - **Always render one chapter first.** The app has a preview render that does a
   single chapter. Check the voice, the subtitle style, and the pacing there
   before you commit to the full hour.
 
-Renders resume. If you stop one, or your PC restarts, it picks up from the last
-finished scene rather than starting over.
+Renders resume, and this is tested rather than hoped for: a 51-scene render was
+killed outright at 46%, the app restarted, and it reused all 23 finished clips
+and completed the rest. If you stop a render, close the app, or your PC
+restarts, it picks up from the last finished scene.
 
 ## About face blurring
 

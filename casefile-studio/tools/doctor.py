@@ -162,10 +162,16 @@ def longform_estimate(cores: int) -> None:
     print(f"    Fish Audio TTS    ~${fish_cost:.2f} per video, a few minutes wall clock")
     print(f"    Kokoro local TTS  free, roughly {60 / 4:.0f}-{60 / 2:.0f} min on CPU")
     print(f"    caption timing    ~10-30 min with faster-whisper small int8")
-    lo = 60 * 1.0 * 8 / max(cores, 1)
-    hi = 60 * 3.0 * 8 / max(cores, 1)
-    print(f"    video render      roughly {lo:.0f}-{hi:.0f} min at 1080p, preset veryfast")
-    print(f"    scratch disk      ~4-8 GB of scene clips before the final mux")
+    # 6.0 CPU-seconds per second of 1080p video, measured on veryfast/crf20
+    # with a 2x Ken Burns upscale, spread across the worker pool.
+    cpu_minutes = 60 * 6.0
+    lo = cpu_minutes / max(cores, 1) * 0.7
+    hi = cpu_minutes / max(cores, 1) * 1.8
+    if hi >= 90:
+        print(f"    video render      roughly {lo / 60:.1f}-{hi / 60:.1f} h at 1080p, preset veryfast")
+    else:
+        print(f"    video render      roughly {lo:.0f}-{hi:.0f} min at 1080p, preset veryfast")
+    print(f"    scratch disk      ~2-4 GB of scene clips before the final mux")
     print()
     print("    Renders are checkpointed per scene, so a crash or a stop resumes")
     print("    instead of starting the hour over.")
