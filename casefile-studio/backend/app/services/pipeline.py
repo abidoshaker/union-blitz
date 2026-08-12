@@ -20,7 +20,10 @@ from ..models import Asset, Chapter, Project, RenderOutput, Scene, Script
 from ..providers.tts import TTSOpts
 from ..queue.base import JobContext
 from . import audio as audio_service
-from . import align_service, image_service, render_service, segmentation, subtitle_service, tts_service
+from . import (
+    align_service, image_service, query, render_service, segmentation,
+    subtitle_service, tts_service, video_service, vision,
+)
 
 log = logging.getLogger("casefile.pipeline")
 
@@ -30,6 +33,14 @@ DEFAULTS: dict[str, Any] = {
     "llm_provider": None,
     "visual_source": "placeholder",
     "image_pool_per_chapter": 8,
+    # Sourcing behaviour
+    "video_enabled": False,
+    "video_provider": "pexels_video",
+    "video_share": 0.35,              # fraction of scenes that get motion
+    "archival_source": "",
+    "blur_faces": "real_person",      # 'off' | 'real_person' | 'all'
+    "soundbite_max_sec": 25.0,
+    "ambient_gain_db": -9.0,
     "subtitle_style": subtitle_service.DEFAULT_STYLE,
     "karaoke": True,
     "burn_subtitles": True,
@@ -163,13 +174,23 @@ def handle_narrate(ctx: JobContext) -> dict[str, Any]:
         cfg = project_settings(project)
         cfg.update({k: v for k, v in ctx.params.items() if k in DEFAULTS and v is not None})
         scenes = [s for s in _scenes(session, project_id) if not only or s.id in only]
-        items = [(int(s.id), s.text) for s in scenes]
+        assets = {int(a.id): a.local_path for a in session.exec(
+            select(Asset).where(Asset.project_id == project_id)).all()}
+        # A soundbite scene is spoken by the footage, so it gets no voiceover
+        # at all. Its slot in the timeline is the clip's own audio, which is
+        # what makes overlap impossible rather than merely quiet.
+        soundbites = [
+            (int(s.id), assets.get(s.asset_id or -1, ""), s.media_in)
+            for s in scenes if s.audio_mode == "soundbite" and s.asset_id
+        ]
+        spoken = {sid for sid, _p, _i in soundbites}
+        items = [(int(s.id), s.text) for s in scenes if int(s.id) not in spoken]
 
-    if not items:
+    if not items and not soundbites:
         return {"scenes": 0}
 
     ctx.progress(0.02, f"narrating {len(items)} scenes", force=True)
-    results = tts_service.synthesize_batch(
+    results = {} if not items else tts_service.synthesize_batch(
         project_id=project_id,
         items=items,
         provider_name=str(cfg["tts_provider"]),
@@ -180,7 +201,34 @@ def handle_narrate(ctx: JobContext) -> dict[str, Any]:
         should_stop=ctx.check_stop,
     )
 
+    # Clip audio for the scenes the footage speaks over.
+    clip_audio: dict[int, tuple[Path, float]] = {}
+    for scene_id, source, media_in in soundbites:
+        ctx.check_stop()
+        if not source or not Path(source).exists():
+            continue
+        dest = settings.project_dir(project_id) / "audio" / f"soundbite_{scene_id}.wav"
+        try:
+            duration = video_service.extract_audio(Path(source), dest)
+            clip_audio[scene_id] = (dest, duration)
+        except Exception as exc:
+            log.warning("could not take audio from the clip for scene %s: %s", scene_id, exc)
+
     with session_scope() as session:
+        for scene_id, (path, duration) in clip_audio.items():
+            asset = Asset(
+                project_id=project_id, type="audio", source_provider="clip",
+                local_path=str(path), duration=duration, content_hash=f"soundbite-{scene_id}",
+            )
+            session.add(asset)
+            session.flush()
+            scene = session.get(Scene, scene_id)
+            if scene:
+                scene.audio_asset_id = int(asset.id)
+                scene.duration = duration
+                scene.status = "audio_ready"
+                session.add(scene)
+
         for scene in _scenes(session, project_id):
             audio = results.get(int(scene.id))
             if not audio:
@@ -197,11 +245,12 @@ def handle_narrate(ctx: JobContext) -> dict[str, Any]:
             scene.status = "audio_ready"
             session.add(scene)
 
-    total = sum(r.duration for r in results.values())
+    total = sum(r.duration for r in results.values()) + sum(d for _p, d in clip_audio.values())
     cost = sum(r.cost for r in results.values())
     ctx.progress(1.0, "narration ready", force=True)
     return {
-        "scenes": len(results),
+        "scenes": len(results) + len(clip_audio),
+        "soundbites": len(clip_audio),
         "cached": sum(1 for r in results.values() if r.cached),
         "audio_sec": round(total, 2),
         "cost_usd": round(cost, 4),
@@ -213,6 +262,12 @@ def handle_narrate(ctx: JobContext) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 def handle_images(ctx: JobContext) -> dict[str, Any]:
+    """Source a still or a clip for every scene, straight from the script.
+
+    Each scene builds a ladder of search queries (services/query.py) and this
+    walks down it until something comes back, so a scene about a named person
+    goes to the archives and a scene about a mood goes to the stock libraries.
+    """
     project_id = int(ctx.params["project_id"])
     only = set(ctx.params.get("scene_ids") or [])
     done = ctx.done_units("images")
@@ -224,93 +279,200 @@ def handle_images(ctx: JobContext) -> dict[str, Any]:
         cfg = project_settings(project)
         cfg.update({k: v for k, v in ctx.params.items() if k in DEFAULTS and v is not None})
         scenes = [s for s in _scenes(session, project_id) if not only or s.id in only]
-        chapters = {int(c.id): c for c in session.exec(
-            select(Chapter).where(Chapter.project_id == project_id)).all()}
         rows = [
             {
                 "id": int(s.id), "prompt": s.image_prompt, "chapter": s.chapter_id,
-                "real": s.depicts_real_person, "has_asset": bool(s.asset_id),
-                "source": s.visual_source,
+                "real": s.depicts_real_person, "text": s.text,
+                "source": s.visual_source, "order": s.order_index,
+                "duration": s.duration or segmentation.estimate_runtime(s.text),
             }
             for s in scenes
         ]
 
-    provider_name = str(cfg["visual_source"])
-    pool_size = int(cfg["image_pool_per_chapter"])
-    by_chapter: dict[Any, list[dict]] = {}
-    for row in rows:
-        by_chapter.setdefault(row["chapter"], []).append(row)
+    if not rows:
+        return {"images": 0, "videos": 0}
 
-    stored_total = 0
+    wanted_video = _plan_video_scenes(rows, cfg)
+    used_urls: set[str] = set()
+    counts = {"images": 0, "videos": 0, "blurred": 0, "faces": 0}
     failures: list[str] = []
-    processed = 0
 
-    for chapter_id, chapter_rows in by_chapter.items():
+    # Stills are pooled per chapter; clips are per scene because a repeated
+    # clip is far more obvious than a repeated photograph.
+    pools: dict[Any, list] = {}
+
+    for i, row in enumerate(rows):
         ctx.check_stop()
-        # Real-person scenes never share a generated pool; each is sourced from
-        # archival material on its own.
-        pooled = [r for r in chapter_rows if not r["real"]]
-        solo = [r for r in chapter_rows if r["real"]]
+        ctx.progress(i / max(len(rows), 1), f"sourcing media {i + 1}/{len(rows)}")
+        if str(row["id"]) in done:
+            continue
 
-        pool: list[image_service.StoredImage] = []
-        if pooled:
-            try:
-                pool = image_service.build_chapter_pool(
-                    project_id=project_id,
-                    prompts=[r["prompt"] for r in pooled],
-                    provider_name=provider_name,
-                    pool_size=min(pool_size, len(pooled)),
-                )
-            except Exception as exc:
-                failures.append(f"chapter {chapter_id}: {exc}")
-
-        for i, row in enumerate(pooled):
-            ctx.check_stop()
-            processed += 1
-            ctx.progress(processed / max(len(rows), 1), f"sourcing images {processed}/{len(rows)}")
-            if str(row["id"]) in done or not pool:
-                continue
-            stored = pool[i % len(pool)]
-            _attach_asset(project_id, row["id"], stored)
+        try:
+            if row["id"] in wanted_video:
+                _source_video_for(project_id, row, cfg, used_urls, counts)
+            else:
+                _source_image_for(project_id, row, cfg, used_urls, counts, pools)
             ctx.mark_done("images", str(row["id"]))
-            stored_total += 1
+        except Exception as exc:
+            failures.append(f"scene {row['order'] + 1}: {exc}")
+            log.warning("sourcing failed for scene %s: %s", row["id"], exc)
 
-        for row in solo:
-            ctx.check_stop()
-            processed += 1
-            ctx.progress(processed / max(len(rows), 1), f"sourcing archival image {processed}/{len(rows)}")
-            if str(row["id"]) in done:
-                continue
-            archival = _archival_provider(cfg)
+    ctx.progress(1.0, "media ready", force=True)
+    return {**counts, "failures": failures[:20]}
+
+
+def _plan_video_scenes(rows: list[dict], cfg: dict[str, Any]) -> set[int]:
+    """Which scenes get motion.
+
+    Spread evenly rather than clustered, and never on a scene flagged as a real
+    person - those are routed to archival stills where the licensing and the
+    right-of-publicity position are clearest.
+    """
+    explicit = {r["id"] for r in rows if r["source"] == "video"}
+    if not cfg.get("video_enabled"):
+        return explicit
+
+    share = max(0.0, min(1.0, float(cfg.get("video_share", 0.35))))
+    eligible = [r for r in rows if not r["real"] and r["source"] != "upload"]
+    target = int(round(len(eligible) * share))
+    if target <= 0:
+        return explicit
+
+    step = max(1, len(eligible) // target)
+    return explicit | {r["id"] for r in eligible[::step][:target]}
+
+
+def _source_video_for(project_id: int, row: dict, cfg: dict[str, Any],
+                      used: set[str], counts: dict[str, int]) -> None:
+    from ..providers import video as video_providers
+
+    provider = video_providers.get_provider(str(cfg.get("video_provider") or "pexels_video"))
+    usable, reason = provider.available()
+    if not usable:
+        raise RuntimeError(reason)
+
+    queries = query.build(row["text"], row["prompt"])
+    needed = max(4.0, float(row["duration"] or 8.0))
+
+    candidate = None
+    chosen_query = ""
+    for term in queries.ladder(prefer_archival=provider.is_archival)[:5]:
+        try:
+            results = provider.search(term, count=10)
+        except Exception as exc:
+            log.debug("video search %r failed: %s", term, exc)
+            continue
+        candidate = query.pick(results, query=term, used=used)
+        if candidate:
+            chosen_query = term
+            break
+    if candidate is None:
+        raise RuntimeError("no video results for any query in the ladder")
+
+    used.add(candidate.url)
+    stored = video_service.store_candidate(
+        project_id, candidate, target_width=int(cfg["width"])
+    )
+
+    audio_mode = "narration"
+    if stored.has_audio and video_service.has_audible_audio(stored.path):
+        # Archival footage that actually speaks gets the voiceover out of its
+        # way; stock B-roll ambience sits underneath instead.
+        default = str(cfg.get("clip_audio_default") or
+                      ("soundbite" if provider.is_archival else "ambient"))
+        if default == "soundbite" and stored.duration <= float(cfg.get("soundbite_max_sec", 25.0)):
+            audio_mode = "soundbite"
+        elif default in ("ambient", "soundbite"):
+            audio_mode = "ambient"
+
+    blur_policy = str(cfg.get("blur_faces", "real_person"))
+    should_blur = blur_policy == "all" or (blur_policy == "real_person" and row["real"])
+    faces = 0
+    if should_blur:
+        try:
+            tracks = video_service.face_tracks(stored.path)
+            faces = len(tracks)
+            counts["faces"] += faces
+            if faces:
+                counts["blurred"] += 1
+        except Exception as exc:
+            log.warning("face detection failed on %s: %s", stored.path.name, exc)
+
+    with session_scope() as session:
+        asset = Asset(
+            project_id=project_id, type="video", source_provider=stored.provider,
+            source_url=stored.source_url, local_path=str(stored.path),
+            license_str=stored.license, attribution_str=stored.attribution,
+            width=stored.width, height=stored.height, duration=stored.duration,
+            content_hash=stored.content_hash, has_audio=stored.has_audio,
+            faces_found=faces,
+        )
+        session.add(asset)
+        session.flush()
+        scene = session.get(Scene, row["id"])
+        if scene:
+            scene.asset_id = int(asset.id)
+            scene.media_kind = "video"
+            scene.visual_source = "video"
+            scene.media_in = video_service.pick_in_point(stored.duration, needed)
+            scene.audio_mode = audio_mode
+            scene.blur_faces = should_blur
+            scene.notes = (scene.notes or "") if scene.notes else f"query: {chosen_query}"
+            session.add(scene)
+    counts["videos"] += 1
+
+
+def _source_image_for(project_id: int, row: dict, cfg: dict[str, Any],
+                      used: set[str], counts: dict[str, int], pools: dict) -> None:
+    from ..providers.image import get_provider
+
+    provider_name = _archival_provider(cfg) if row["real"] else str(cfg["visual_source"])
+    provider = get_provider(provider_name)
+
+    if provider.kind == "ai":
+        stored = image_service.source_image(
+            project_id=project_id, prompt=row["prompt"], provider_name=provider_name,
+            depicts_real_person=row["real"],
+        )
+    else:
+        queries = query.build(row["text"], row["prompt"])
+        candidate = None
+        for term in queries.ladder(prefer_archival=row["real"])[:5]:
             try:
-                stored = image_service.source_image(
-                    project_id=project_id, prompt=row["prompt"],
-                    provider_name=archival, depicts_real_person=True,
-                )
+                results = provider.search(term, count=12)
             except Exception as exc:
-                failures.append(f"scene {row['id']}: {exc}")
+                log.debug("image search %r failed: %s", term, exc)
                 continue
-            _attach_asset(project_id, row["id"], stored)
-            ctx.mark_done("images", str(row["id"]))
-            stored_total += 1
+            candidate = query.pick(results, query=term, used=used)
+            if candidate:
+                break
+        if candidate is None:
+            raise RuntimeError("no image results for any query in the ladder")
+        used.add(candidate.url)
+        stored = image_service.store_candidate(project_id, candidate)
 
-    ctx.progress(1.0, "images ready", force=True)
-    return {"images": stored_total, "failures": failures[:20]}
+    blur_policy = str(cfg.get("blur_faces", "real_person"))
+    should_blur = blur_policy == "all" or (blur_policy == "real_person" and row["real"])
+    faces = 0
+    blurred_path = ""
+    if should_blur and vision.available()[0]:
+        try:
+            target = stored.path.with_name(stored.path.stem + "_deid.jpg")
+            faces = vision.blur_image_faces(stored.path, target)
+            blurred_path = str(target)
+            counts["faces"] += faces
+            if faces:
+                counts["blurred"] += 1
+        except Exception as exc:
+            log.warning("face blur failed on %s: %s", stored.path.name, exc)
+
+    _attach_asset(project_id, row["id"], stored,
+                  blurred_path=blurred_path, faces=faces, blur=should_blur)
+    counts["images"] += 1
 
 
-def _archival_provider(cfg: dict[str, Any]) -> str:
-    from ..providers.image import ARCHIVAL_PROVIDERS, get_provider
-
-    preferred = str(cfg.get("archival_source") or "")
-    if preferred:
-        return preferred
-    for name in ARCHIVAL_PROVIDERS:
-        if get_provider(name).available()[0]:
-            return name
-    return "wikimedia"
-
-
-def _attach_asset(project_id: int, scene_id: int, stored: image_service.StoredImage) -> None:
+def _attach_asset(project_id: int, scene_id: int, stored: image_service.StoredImage,
+                  *, blurred_path: str = "", faces: int = 0, blur: bool = False) -> None:
     with session_scope() as session:
         asset = session.exec(
             select(Asset).where(Asset.project_id == project_id,
@@ -323,12 +485,19 @@ def _attach_asset(project_id: int, scene_id: int, stored: image_service.StoredIm
                 source_url=stored.source_url, local_path=str(stored.path),
                 license_str=stored.license, attribution_str=stored.attribution,
                 width=stored.width, height=stored.height, content_hash=stored.content_hash,
+                blurred_path=blurred_path, faces_found=faces,
             )
             session.add(asset)
             session.flush()
+        elif blurred_path and not asset.blurred_path:
+            asset.blurred_path = blurred_path
+            asset.faces_found = faces
+            session.add(asset)
         scene = session.get(Scene, scene_id)
         if scene:
             scene.asset_id = int(asset.id)
+            scene.media_kind = "image"
+            scene.blur_faces = blur
             scene.status = "visual_ready" if scene.status == "audio_ready" else scene.status
             session.add(scene)
 
@@ -364,16 +533,24 @@ def handle_render(ctx: JobContext) -> dict[str, Any]:
                 select(Chapter).where(Chapter.project_id == project_id).order_by(Chapter.order_index)
             ).all()
         ]
-        rows = [
-            {
+        rows = []
+        for s in scenes:
+            visual = assets.get(s.asset_id or -1)
+            # A blurred derivative always wins over the original: if the blur
+            # exists, the original must never reach the render.
+            picture = ""
+            if visual:
+                picture = visual.blurred_path if (s.blur_faces and visual.blurred_path) else visual.local_path
+            rows.append({
                 "id": int(s.id), "index": s.order_index, "text": s.text,
                 "audio": assets[s.audio_asset_id].local_path if s.audio_asset_id in assets else "",
-                "image": assets[s.asset_id].local_path if s.asset_id in assets else "",
+                "image": picture,
+                "media_kind": s.media_kind, "media_in": s.media_in,
+                "media_duration": visual.duration if visual else 0.0,
+                "audio_mode": s.audio_mode, "blur_faces": s.blur_faces,
                 "kenburns": s.kenburns, "chapter": s.chapter_id,
                 "disclaimer": s.ai_disclaimer,
-            }
-            for s in scenes
-        ]
+            })
 
     if missing_audio:
         raise ValueError(f"{len(missing_audio)} scene(s) have no narration yet. Run 'Narrate' first.")
@@ -444,6 +621,19 @@ def handle_render(ctx: JobContext) -> dict[str, Any]:
         if row["chapter"] and row["chapter"] not in seen_chapters:
             seen_chapters.add(row["chapter"])
             lower = chapter_titles.get(row["chapter"], "")
+        poster = None
+        blur_tracks: list = []
+        if row["media_kind"] == "video":
+            source = Path(row["image"])
+            poster = source.with_suffix(".jpg")
+            if not poster.exists():
+                ffmpeg.run(["-i", str(source), "-frames:v", "1", "-q:v", "3", str(poster)])
+            if row["blur_faces"]:
+                try:
+                    blur_tracks = video_service.face_tracks(source)
+                except Exception as exc:
+                    log.warning("face regions unavailable for scene %s: %s", row["id"], exc)
+
         specs.append(render_service.SceneSpec(
             index=i,
             image=Path(row["image"]),
@@ -452,6 +642,11 @@ def handle_render(ctx: JobContext) -> dict[str, Any]:
             words=words_by_scene[row["id"]],
             banner=disclaimer if row["disclaimer"] else "",
             lower_third=lower,
+            media_kind=row["media_kind"],
+            media_in=float(row["media_in"] or 0.0),
+            media_duration=float(row["media_duration"] or 0.0),
+            poster=poster,
+            blur_tracks=blur_tracks,
         ))
     render_service.plan_transitions(specs, opts)
 
@@ -478,10 +673,13 @@ def handle_render(ctx: JobContext) -> dict[str, Any]:
     # --- 4. master audio -------------------------------------------------
     ctx.progress(0.83, "mixing audio and setting loudness", force=True)
     music = Path(cfg["music_path"]) if cfg.get("music_path") else None
+    ambient = _build_ambient_bed(project_id, rows, timeline, chapter_id)
     master_audio = audio_service.build_master(
         narration=narration,
         dest=base / "audio" / f"master_{chapter_id or 'full'}.m4a",
         music=music if music and music.exists() else None,
+        ambient=ambient,
+        ambient_gain_db=float(cfg.get("ambient_gain_db", -9.0)),
         target_lufs=float(cfg["loudness_lufs"]),
         total_sec=timeline.total,
         on_progress=lambda f: ctx.progress(0.83 + f * 0.06, "mixing audio"),
@@ -547,6 +745,47 @@ def handle_render(ctx: JobContext) -> dict[str, Any]:
     }
 
 
+def _build_ambient_bed(project_id: int, rows: list[dict], timeline, chapter_id) -> Path | None:
+    """A track the same length as the narration, holding clip ambience.
+
+    Built as one segment per scene - silence, or that scene's clip audio fitted
+    to its slot - and concatenated. Same construction as the narration track,
+    so the two line up sample for sample without any delay arithmetic.
+    """
+    if not any(r["audio_mode"] == "ambient" for r in rows):
+        return None
+
+    work = settings.project_dir(project_id) / "audio" / "ambient"
+    work.mkdir(parents=True, exist_ok=True)
+    segments: list[Path] = []
+
+    for i, row in enumerate(rows):
+        # Each segment spans the scene's whole *slot*, up to the next scene's
+        # start, so the inter-scene breaths are included. Sizing by scene
+        # length alone would leave the bed short by one gap per scene and drift
+        # it steadily earlier across an hour.
+        slot_end = timeline.starts[i + 1] if i + 1 < len(timeline.starts) else timeline.total
+        length = max(0.05, slot_end - timeline.starts[i])
+        segment = work / f"seg_{i:05d}.wav"
+        if row["audio_mode"] == "ambient" and row["media_kind"] == "video" and row["image"]:
+            raw = work / f"raw_{i:05d}.wav"
+            try:
+                video_service.extract_audio(Path(row["image"]), raw)
+                audio_service.fit(raw, segment, length)
+            except Exception as exc:
+                log.warning("ambient audio failed for scene %s: %s", row["id"], exc)
+                audio_service.silence(length, segment)
+            finally:
+                raw.unlink(missing_ok=True)
+        else:
+            audio_service.silence(length, segment)
+        segments.append(segment)
+
+    dest = settings.project_dir(project_id) / "audio" / f"ambient_{chapter_id or 'full'}.wav"
+    audio_service.concat_wavs(segments, dest, gap_sec=0.0)
+    return dest
+
+
 def _save_words(path: Path, words: list[align_service.Word]) -> None:
     import json
 
@@ -569,8 +808,10 @@ def handle_build(ctx: JobContext) -> dict[str, Any]:
     stages = ctx.checkpoint.setdefault("stages", [])
     results: dict[str, Any] = ctx.checkpoint.setdefault("results", {})
 
-    plan = [("segment", handle_segment), ("narrate", handle_narrate),
-            ("images", handle_images), ("render", handle_render)]
+    # Media first: a soundbite scene's audio is extracted from its clip, so the
+    # footage has to exist before the narration timeline can be built.
+    plan = [("segment", handle_segment), ("images", handle_images),
+            ("narrate", handle_narrate), ("render", handle_render)]
     if ctx.params.get("skip_segment"):
         plan = plan[1:]
 

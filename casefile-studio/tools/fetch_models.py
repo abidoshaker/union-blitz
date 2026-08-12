@@ -39,6 +39,20 @@ KOKORO_FILES = [
     ),
 ]
 
+# YuNet face detector, used for the face-blur pass. Small, but it lives behind
+# git-lfs, so the media.githubusercontent endpoint is the one that serves bytes
+# rather than a pointer file.
+FACE_FILES = [
+    (
+        "face_detection_yunet_2023mar.onnx",
+        [
+            "https://media.githubusercontent.com/media/opencv/opencv_zoo/main/models/"
+            "face_detection_yunet/face_detection_yunet_2023mar.onnx",
+        ],
+        200_000,
+    ),
+]
+
 CHUNK = 1 << 20
 
 
@@ -116,6 +130,7 @@ def prefetch_whisper(size: str) -> bool:
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--skip-kokoro", action="store_true")
+    ap.add_argument("--skip-face", action="store_true")
     ap.add_argument("--skip-whisper", action="store_true")
     ap.add_argument(
         "--whisper-model",
@@ -130,6 +145,11 @@ def main() -> int:
     if not args.skip_kokoro:
         print("      Kokoro-82M local voice, Apache-2.0, ~340 MB")
         for name, urls, min_size in KOKORO_FILES:
+            ok &= download(urls, MODELS / name, min_size)
+
+    if not args.skip_face:
+        print("      YuNet face detector for the blur pass, ~230 KB")
+        for name, urls, min_size in FACE_FILES:
             ok &= download(urls, MODELS / name, min_size)
 
     if not args.skip_whisper:

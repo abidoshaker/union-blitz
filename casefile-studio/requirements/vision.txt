@@ -1,0 +1,6 @@
+# Face detection and blurring. ~40 MB of wheels plus a 230 KB model file
+# fetched by tools/fetch_models.py.
+#
+# Installed by default. Skip with --minimal if you never need faces obscured.
+
+opencv-python-headless>=4.9

@@ -64,10 +64,15 @@ stops the app.
    number box and press Enter — that last one is the quick way to send a scene
    from position 12 to position 190. Tick several scenes first and dragging one
    of them moves the whole group together.
-5. **Render tab.** Press **Preview render · first chapter** first. Check the
+5. **Sourcing panel** (top of the Storyboard tab). Turn on *Mix in video
+   clips* if you want motion as well as stills, pick where clips come from, and
+   choose what happens when a clip has its own sound. The useful one is
+   **"Let it speak — pause the voiceover"**: the narration stops for that scene
+   so the two never talk over each other.
+6. **Render tab.** Press **Preview render · first chapter** first. Check the
    voice, the captions and the pacing on a few minutes before spending hours on
    the whole thing.
-6. When it looks right, **Render the full video**. You get an MP4, an `.srt`,
+7. When it looks right, **Render the full video**. You get an MP4, an `.srt`,
    a chapters file to paste into your YouTube description, and suggested
    mid-roll ad positions.
 
@@ -104,13 +109,25 @@ Two things worth knowing before your first one:
 Renders resume. If you stop one, or your PC restarts, it picks up from the last
 finished scene rather than starting over.
 
+## About face blurring
+
+The app can blur faces automatically — on scenes flagged as showing a real
+person, or on everything. It works on both photographs and video.
+
+**Treat it as an assist, not a guarantee.** It finds most clear, front-on
+faces. It misses faces turned away, in shadow, small in frame, motion-blurred,
+or in a crowd. If a face gets through and you publish it, that is your problem
+and not the software's — so watch the preview render before you upload, and
+blur anything it missed by hand.
+
 ## API keys you will want
 
 | Service | What for | Cost |
 |---|---|---|
 | **Fish Audio** (fish.audio) | the narrator voice, including your cloned voice | $15 per 1M characters ≈ $0.78/hour of video |
 | Anthropic or OpenAI | splitting the script into scenes | a few cents per script |
-| Pexels / Pixabay | free stock photos | free |
+| Pexels / Pixabay | free stock photos **and video clips** | free |
+| Internet Archive | archival footage, no key needed | free |
 | fal.ai or OpenAI images | optional AI B-roll | ~$0.03 per image |
 
 Kokoro and Edge-TTS need no key at all, and are the right way to hear a full

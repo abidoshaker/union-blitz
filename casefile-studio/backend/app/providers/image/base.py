@@ -16,6 +16,11 @@ class AssetCandidate:
     width: int = 0
     height: int = 0
     title: str = ""
+    # 'image' or 'video'. Video candidates also carry a duration and a poster
+    # frame, which the renderer uses for the crossfade into the clip.
+    kind: str = "image"
+    duration: float = 0.0
+    has_audio: bool = False
     # Unsplash's API terms require pinging a download endpoint when an image is
     # actually used. Carried here so image_service can honour it.
     download_location: str = ""

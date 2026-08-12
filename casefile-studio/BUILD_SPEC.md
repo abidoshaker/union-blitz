@@ -200,6 +200,81 @@ class TTSProvider:
   paying), Piper, ElevenLabs, OpenAI TTS. Each declares `commercial_ok` and the
   UI shows it as a badge.
 
+## 5b. Video and archival footage
+
+Scenes are backed by a still **or** a clip. Providers, all licensed APIs with
+machine-readable terms:
+
+| Provider | For | Licence |
+|---|---|---|
+| Pexels video | atmospheric B-roll | free commercial, no attribution |
+| Pixabay video | atmospheric B-roll | free commercial, no attribution |
+| Internet Archive | genuine archival footage | mixed; public-domain-only by default |
+
+**There is no scraper.** Not for YouTube, not for news sites. For a monetised
+channel that distinction is the difference between B-roll and a copyright
+strike, so it is structural rather than a setting.
+
+Clips are downloaded under a size cap, trimmed to at most 40 s and re-encoded
+once to a normalised intermediate (H.264, ≤ output width, ≤30 fps, yuv420p).
+A 4K 200 MB source for a twelve-second scene is otherwise paid for at every
+later stage.
+
+### Clip audio: three modes, one of which is the point
+
+A scene's `audio_mode` decides what happens to the footage's own sound:
+
+- **`narration`** — clip muted, voiceover only. The default for silent B-roll.
+- **`soundbite`** — **the clip speaks and the voiceover pauses.** The clip's
+  audio is placed *in the narration track itself*, in that scene's slot, so
+  there is no voiceover at that moment at all. Overlap is impossible by
+  construction rather than mixed around. Scene duration comes from the clip.
+- **`ambient`** — clip audio sits under the narration, sidechain-ducked like
+  the music bed.
+
+The ambient bed is built as one segment per scene — silence, or that scene's
+clip audio fitted to its slot — then concatenated, so it is the same length as
+the narration to the sample. Two things this must respect, both learned the
+hard way: segments span the whole scene *slot* including the inter-scene gap
+(sizing by scene length alone drifts the bed earlier by one gap per scene), and
+`sidechaincompress` emits `min(main, sidechain)`, so a bed even slightly short
+truncates the entire mix.
+
+### Face blurring
+
+YuNet (OpenCV) detection, then pixelation to a **fixed block count** rather
+than a fixed kernel — a fixed-size blur leaves a large face as legible as a
+small one. Stills are blurred into a derived file and cached; video is detected
+on sampled frames, grouped into piecewise regions that follow the face, and
+blurred in the filtergraph in source pixel coordinates before any scale or crop.
+
+Policy is `off` | `real_person` | `all`, defaulting to flagged scenes.
+
+**State this plainly in the UI, and do not soften it:** detection is an assist,
+not a guarantee. It misses faces in profile, in shadow, at low resolution, in
+motion blur and in crowds. Publishing an unblurred identifiable face because a
+detector missed it is the user's exposure. The test that matters is coverage of
+the source — every face found in the original falls inside an active blur
+region — not re-running the detector on the blurred output, which fires on the
+blurred blob itself and proves nothing.
+
+## 5c. Turning a script into search queries
+
+The naive approach — hand the image prompt to a stock API — fails specifically
+on true crime. Stock libraries have nothing for "Vincent Moretti Mercer Street
+1974" and a great deal for "warehouse night rain"; archives are the opposite.
+
+So each scene builds a **ladder** from specific to generic, and sourcing walks
+down it until something returns. Named entities route to archival sources,
+atmosphere to stock. Two traps worth naming: match topic keywords on word
+boundaries (`"car" in "careful"` sources a vintage car for a scene about
+paperwork), and stop proper-noun runs at sentence-ending periods while keeping
+title abbreviations attached (`Det. Halloran` is one entity; `Mercer Street. It`
+is not).
+
+Results are scored on title overlap, resolution and duration, and de-duplicated
+across the project so a chapter does not show the same photograph repeatedly.
+
 ## 6. Image provider-adapter interface
 
 `ImageProvider`: `search(query, opts)` for stock, `generate(prompt, opts)` for

@@ -4,6 +4,7 @@ import { Storyboard } from "../components/Storyboard";
 import { Banner, Empty, Pill, Stat } from "../components/ui";
 import {
   api,
+  type Json,
   formatBytes,
   formatDuration,
   formatRange,
@@ -242,6 +243,8 @@ function StoryboardTab({
         />
       </div>
 
+      <SourcingPanel project={project} onSaved={onChanged} />
+
       <div className="card flex flex-wrap items-center gap-2 p-3">
         <span className="text-sm text-slate-400">
           {selected.size > 0 ? `${selected.size} selected` : "Select scenes for a batch action"}
@@ -293,6 +296,109 @@ function StoryboardTab({
         onSelect={setSelected}
         onSceneChanged={onChanged}
       />
+    </div>
+  );
+}
+
+function SourcingPanel({ project, onSaved }: { project: Project; onSaved: () => void }) {
+  const [cfg, setCfg] = useState<Json>(project.settings ?? {});
+  const [saving, setSaving] = useState(false);
+
+  const set = (key: string, value: unknown) => setCfg((c) => ({ ...c, [key]: value }));
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await api.patch(`/api/projects/${project.id}`, { settings: cfg });
+      onSaved();
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <div className="card p-4">
+      <div className="mb-3 flex items-center gap-2">
+        <h3 className="text-base">Sourcing</h3>
+        <span className="text-xs text-slate-500">
+          what the app goes and finds for each scene
+        </span>
+        <button className="btn-amber ml-auto !py-1 !px-3 text-xs" onClick={save} disabled={saving}>
+          {saving ? "Saving…" : "Save"}
+        </button>
+      </div>
+
+      <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
+        <label className="block">
+          <span className="label">Motion footage</span>
+          <select
+            className="input"
+            value={cfg.video_enabled ? "on" : "off"}
+            onChange={(e) => set("video_enabled", e.target.value === "on")}
+          >
+            <option value="off">Stills only</option>
+            <option value="on">Mix in video clips</option>
+          </select>
+        </label>
+
+        <label className="block">
+          <span className="label">Clip source</span>
+          <select
+            className="input"
+            value={String(cfg.video_provider ?? "pexels_video")}
+            onChange={(e) => set("video_provider", e.target.value)}
+          >
+            <option value="pexels_video">Pexels — B-roll</option>
+            <option value="pixabay_video">Pixabay — B-roll</option>
+            <option value="internet_archive">Internet Archive — archival</option>
+          </select>
+        </label>
+
+        <label className="block">
+          <span className="label">Share of scenes with video</span>
+          <select
+            className="input"
+            value={String(cfg.video_share ?? 0.35)}
+            onChange={(e) => set("video_share", Number(e.target.value))}
+          >
+            <option value="0.15">A little (15%)</option>
+            <option value="0.35">Some (35%)</option>
+            <option value="0.6">A lot (60%)</option>
+          </select>
+        </label>
+
+        <label className="block">
+          <span className="label">Blur faces</span>
+          <select
+            className="input"
+            value={String(cfg.blur_faces ?? "real_person")}
+            onChange={(e) => set("blur_faces", e.target.value)}
+          >
+            <option value="real_person">On flagged scenes</option>
+            <option value="all">Everywhere</option>
+            <option value="off">Off</option>
+          </select>
+        </label>
+
+        <label className="block sm:col-span-2">
+          <span className="label">When a clip has its own sound</span>
+          <select
+            className="input"
+            value={String(cfg.clip_audio_default ?? "")}
+            onChange={(e) => set("clip_audio_default", e.target.value)}
+          >
+            <option value="">Decide per source (archival speaks, B-roll sits under)</option>
+            <option value="soundbite">Let it speak — pause the voiceover</option>
+            <option value="ambient">Keep it under the voiceover, ducked</option>
+            <option value="mute">Mute it — voiceover only</option>
+          </select>
+        </label>
+      </div>
+
+      <p className="mt-3 text-xs text-slate-500">
+        Face blurring is an assist, not a guarantee — it misses faces in profile, in shadow and at
+        low resolution. Check the preview render before you publish.
+      </p>
     </div>
   );
 }

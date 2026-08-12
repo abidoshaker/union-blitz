@@ -305,6 +305,7 @@ rem --- Python packages -------------------------------------------------------
 
 call :pipreq core.txt "core backend" 1
 if "%WANT_LOCAL_TTS%"=="1" call :pipreq tts-local.txt "local Kokoro voice" 0
+if "%WANT_LOCAL_TTS%"=="1" call :pipreq vision.txt "face detection and blurring" 0
 call :pipreq align-lite.txt "subtitle timing" 0
 if "%WANT_ALIGN_FULL%"=="1" call :pipreq align-full.txt "high-accuracy alignment, large download" 0
 if "%WANT_OPTIONAL%"=="1"   call :pipreq optional.txt "optional provider SDKs" 0

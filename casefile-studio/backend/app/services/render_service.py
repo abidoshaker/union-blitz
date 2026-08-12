@@ -73,18 +73,33 @@ class SceneSpec:
     render layer stays testable without a database."""
 
     index: int
-    image: Path
+    image: Path                 # the still, or the video file for a video scene
     frames: int
     kenburns: str = "auto"
     words: list[Word] = field(default_factory=list)
     banner: str = ""
     lower_third: str = ""
+
+    # Video scenes carry their own motion, so they get no Ken Burns. `poster`
+    # is the clip's opening frame and is what the previous scene crossfades
+    # into, which keeps the transition a still-to-still blend either way.
+    media_kind: str = "image"   # 'image' | 'video'
+    media_in: float = 0.0
+    media_duration: float = 0.0
+    poster: Path | None = None
+    blur_tracks: list = field(default_factory=list)
+
     # Filled in by plan_transitions.
     next_image: Path | None = None
     next_kenburns: str = "auto"
+    next_kind: str = "image"
     transition_frames: int = 0
     motion_offset_frames: int = 0
     motion_total_frames: int = 0
+
+    @property
+    def poster_path(self) -> Path:
+        return self.poster or self.image
 
 
 def frame_plan(starts: Sequence[float], total: float, fps: int) -> list[int]:
@@ -110,13 +125,18 @@ def plan_transitions(specs: list[SceneSpec], opts: RenderOpts) -> None:
         # A transition may never eat more than 40% of either neighbour.
         limit = int(min(spec.frames, nxt.frames) * 0.4)
         spec.transition_frames = max(0, min(int(round(opts.transition_sec * fps)), limit))
-        spec.next_image = nxt.image if spec.transition_frames else None
+        # Always blend into the next scene's opening still, whether that scene
+        # is a photograph or the first frame of a clip.
+        spec.next_image = nxt.poster_path if spec.transition_frames else None
         spec.next_kenburns = nxt.kenburns
+        spec.next_kind = nxt.media_kind
 
     for i, spec in enumerate(specs):
         incoming = specs[i - 1].transition_frames if i > 0 else 0
-        spec.motion_offset_frames = incoming
-        spec.motion_total_frames = spec.frames + incoming
+        # Only a still has motion to hand over. A video scene starts on its own
+        # first frame, which is exactly the frame the previous clip faded into.
+        spec.motion_offset_frames = incoming if spec.media_kind == "image" else 0
+        spec.motion_total_frames = spec.frames + spec.motion_offset_frames
 
 
 # ---------------------------------------------------------------------------
@@ -150,6 +170,11 @@ def render_scene_clip(
             "tf": spec.transition_frames,
             "mo": spec.motion_offset_frames,
             "mt": spec.motion_total_frames,
+            "kind": spec.media_kind,
+            "in": round(spec.media_in, 3),
+            "nk": spec.next_kind,
+            "blur": [(round(t.start, 2), round(t.end, 2), t.box.x, t.box.y, t.box.w, t.box.h)
+                     for t in spec.blur_tracks],
             "wt": [(round(w.start, 2), round(w.end, 2)) for w in spec.words],
         },
     )
@@ -161,41 +186,80 @@ def render_scene_clip(
         stale.unlink(missing_ok=True)
 
     fps = opts.fps
-    style = ffmpeg.pick_kenburns(spec.kenburns, spec.index)
+    seconds = spec.frames / fps
+    args: list[str] = []
+    chains: list[str] = []
 
-    args: list[str] = [
-        "-loop", "1", "-framerate", str(fps), "-t", f"{spec.frames / fps + 1:.3f}",
-        "-i", str(spec.image),
-    ]
-    chains = [
-        "[0:v]"
-        + ffmpeg.kenburns_chain(
-            style=style, out_w=opts.width, out_h=opts.height, fps=fps,
-            motion_offset_frames=spec.motion_offset_frames,
-            motion_total_frames=max(spec.motion_total_frames, spec.frames),
-            upscale=opts.upscale,
+    if spec.media_kind == "video":
+        # Loop the source when the scene outlasts it, rather than freezing on
+        # the last frame or ending short.
+        remaining = max(0.0, (spec.media_duration or 0.0) - spec.media_in)
+        if remaining and remaining < seconds:
+            args += ["-stream_loop", "-1"]
+        args += ["-ss", f"{spec.media_in:.3f}", "-t", f"{seconds + 1:.3f}", "-i", str(spec.image)]
+
+        # Blur runs first, in the source's own pixel coordinates - that is the
+        # space the detector measured in, before any scale or crop.
+        if spec.blur_tracks:
+            from .vision import blur_filter_chain
+
+            chains.append(blur_filter_chain(
+                spec.blur_tracks, label_in="0:v", label_out="deid",
+                time_offset=spec.media_in,
+            ))
+            source = "deid"
+        else:
+            source = "0:v"
+
+        chains.append(
+            f"[{source}]scale={opts.width}:{opts.height}:force_original_aspect_ratio=increase:flags=lanczos,"
+            f"crop={opts.width}:{opts.height},fps={fps},format=yuv420p,setsar=1,"
+            f"trim=end_frame={spec.frames},setpts=PTS-STARTPTS[base]"
         )
-        + f",trim=end_frame={spec.frames},setpts=PTS-STARTPTS[base]"
-    ]
+    else:
+        style = ffmpeg.pick_kenburns(spec.kenburns, spec.index)
+        args += [
+            "-loop", "1", "-framerate", str(fps), "-t", f"{seconds + 1:.3f}",
+            "-i", str(spec.image),
+        ]
+        chains.append(
+            "[0:v]"
+            + ffmpeg.kenburns_chain(
+                style=style, out_w=opts.width, out_h=opts.height, fps=fps,
+                motion_offset_frames=spec.motion_offset_frames,
+                motion_total_frames=max(spec.motion_total_frames, spec.frames),
+                upscale=opts.upscale,
+            )
+            + f",trim=end_frame={spec.frames},setpts=PTS-STARTPTS[base]"
+        )
     last = "base"
 
     if spec.transition_frames and spec.next_image:
-        next_style = ffmpeg.pick_kenburns(spec.next_kenburns, spec.index + 1)
         args += [
             "-loop", "1", "-framerate", str(fps),
             "-t", f"{spec.transition_frames / fps + 1:.3f}", "-i", str(spec.next_image),
         ]
-        # The next scene's motion starts here, in this clip's tail, and the
-        # next clip picks it up at motion_offset_frames. Without that handoff
-        # the crossfade would replay the next scene's opening.
-        chains.append(
-            "[1:v]"
-            + ffmpeg.kenburns_chain(
+        if spec.next_kind == "image":
+            # The next scene's motion starts here, in this clip's tail, and the
+            # next clip picks it up at motion_offset_frames. Without that
+            # handoff the crossfade would replay the next scene's opening.
+            next_style = ffmpeg.pick_kenburns(spec.next_kenburns, spec.index + 1)
+            incoming = ffmpeg.kenburns_chain(
                 style=next_style, out_w=opts.width, out_h=opts.height, fps=fps,
                 motion_offset_frames=0,
                 motion_total_frames=max(spec.transition_frames, 1),
                 upscale=opts.upscale,
             )
+        else:
+            # Blending into a clip's frozen opening frame, which is exactly the
+            # frame that clip then starts playing from.
+            incoming = (
+                f"scale={opts.width}:{opts.height}:force_original_aspect_ratio=increase:flags=lanczos,"
+                f"crop={opts.width}:{opts.height},fps={fps},setsar=1"
+            )
+        # Input 1: both branches above add exactly one input before this one.
+        chains.append(
+            "[1:v]" + incoming
             + f",trim=end_frame={spec.transition_frames},setpts=PTS-STARTPTS[incoming]"
         )
         offset = (spec.frames - spec.transition_frames) / fps

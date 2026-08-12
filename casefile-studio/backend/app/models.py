@@ -64,9 +64,20 @@ class Scene(SQLModel, table=True):
     duration: float = 0.0
 
     image_prompt: str = ""
-    visual_source: str = "stock"          # 'ai' | 'stock' | 'upload'
+    visual_source: str = "stock"          # 'ai' | 'stock' | 'video' | 'upload'
     asset_id: Optional[int] = Field(default=None, foreign_key="asset.id")
     audio_asset_id: Optional[int] = Field(default=None, foreign_key="asset.id")
+
+    # A scene is backed by either a still or a video clip.
+    media_kind: str = "image"             # 'image' | 'video'
+    media_in: float = 0.0                 # in-point within the source video
+
+    # How this scene's audio works:
+    #   narration  the voiceover speaks; any clip audio is dropped
+    #   soundbite  the clip speaks and the voiceover pauses for it entirely
+    #   ambient    the clip's audio sits under the voiceover, ducked
+    audio_mode: str = "narration"
+    blur_faces: bool = False
 
     kenburns: str = "auto"
     status: str = "new"                   # new | audio_ready | visual_ready | ready | error
@@ -93,6 +104,11 @@ class Asset(SQLModel, table=True):
     height: int = 0
     duration: float = 0.0
     content_hash: str = ""
+    # Face-blurred derivative. The original is kept so the blur can be redone
+    # at a different strength without re-downloading.
+    blurred_path: str = ""
+    faces_found: int = 0
+    has_audio: bool = False
     created_at: datetime = Field(default_factory=utcnow)
 
 

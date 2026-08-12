@@ -52,6 +52,10 @@ export interface Scene {
   text: string;
   image_prompt: string;
   visual_source: string;
+  media_kind: string;
+  media_in: number;
+  audio_mode: string;
+  blur_faces: boolean;
   kenburns: string;
   status: string;
   duration: number;

@@ -22,6 +22,11 @@ class ScenePatch(BaseModel):
     depicts_real_person: bool | None = None
     ai_disclaimer: bool | None = None
     notes: str | None = None
+    # Video and clip-audio controls
+    media_kind: str | None = None
+    media_in: float | None = None
+    audio_mode: str | None = None     # narration | soundbite | ambient
+    blur_faces: bool | None = None
 
 
 class ReorderIn(BaseModel):
@@ -43,6 +48,10 @@ def _shape(scene: Scene, assets: dict[int, Asset]) -> dict[str, Any]:
         "text": scene.text,
         "image_prompt": scene.image_prompt,
         "visual_source": scene.visual_source,
+        "media_kind": scene.media_kind,
+        "media_in": scene.media_in,
+        "audio_mode": scene.audio_mode,
+        "blur_faces": scene.blur_faces,
         "kenburns": scene.kenburns,
         "status": scene.status,
         "duration": scene.duration,
@@ -107,6 +116,11 @@ def patch_scene(scene_id: int, body: ScenePatch, session: Session = Depends(get_
         raise HTTPException(404, "Scene not found")
     for field, value in body.model_dump(exclude_none=True).items():
         setattr(scene, field, value)
+    if body.audio_mode is not None:
+        # A soundbite takes its audio from the clip and a narration scene takes
+        # it from TTS, so switching between them invalidates whatever is cached.
+        scene.audio_asset_id = None
+        scene.status = "new"
     if body.text is not None:
         # The narration changed, so the cached audio no longer matches it.
         scene.audio_asset_id = None

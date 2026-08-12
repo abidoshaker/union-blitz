@@ -93,13 +93,19 @@ def run(
     on_progress: Callable[[float], None] | None = None,
     total_sec: float | None = None,
     timeout: float | None = None,
+    loglevel: str = "error",
 ) -> str:
-    """Run ffmpeg. Returns stderr; raises FFmpegError on failure."""
+    """Run ffmpeg. Returns stderr; raises FFmpegError on failure.
+
+    `loglevel` matters more than it looks: the measurement filters - loudnorm's
+    JSON summary and volumedetect's levels - print at info level, so a caller
+    that needs to read them back must ask for it.
+    """
     exe = settings.ffmpeg
     if not exe:
         raise FFmpegError(args, -1, "FFmpeg is not installed")
 
-    cmd = [exe, "-hide_banner", "-nostdin", "-loglevel", "error", "-y", *args]
+    cmd = [exe, "-hide_banner", "-nostdin", "-loglevel", loglevel, "-y", *args]
     if on_progress and total_sec:
         cmd += ["-progress", "pipe:2", "-nostats"]
 

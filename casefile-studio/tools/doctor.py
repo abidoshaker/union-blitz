@@ -112,6 +112,12 @@ def check_models() -> None:
         say(WARN, "Kokoro model files missing - run tools/fetch_models.py")
         warnings.append("kokoro-models")
 
+    if (MODELS / "face_detection_yunet_2023mar.onnx").exists():
+        say(OK, "Face detection model present - face blurring available")
+    else:
+        say(WARN, "Face detection model missing - run tools/fetch_models.py to enable blurring")
+        warnings.append("face-model")
+
 
 def check_resources() -> int:
     cores = os.cpu_count() or 1
@@ -178,6 +184,7 @@ def main() -> int:
     check_module("cryptography", "encrypted key storage", True)
     check_module("soundfile", "audio I/O", True)
     print()
+    check_module("cv2", "OpenCV, for face blurring", False)
     check_module("kokoro_onnx", "Kokoro local TTS", False)
     check_module("edge_tts", "Edge TTS free cloud voice", False)
     check_module("faster_whisper", "faster-whisper caption timing", False)

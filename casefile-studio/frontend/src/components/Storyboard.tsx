@@ -477,9 +477,13 @@ function SceneCard({
             onBlur={() => setTarget(String(position))}
           />
           {scene.duration > 0 && <Pill>{formatDuration(scene.duration)}</Pill>}
+          <Pill tone={scene.media_kind === "video" ? "info" : "slate"}>
+            {scene.media_kind === "video" ? "video" : "photo"}
+          </Pill>
           <Pill tone={scene.has_audio ? "success" : "slate"}>
             {scene.has_audio ? "audio" : "no audio"}
           </Pill>
+          {scene.blur_faces && <Pill tone="magenta">faces blurred</Pill>}
           {scene.depicts_real_person && <Pill tone="danger">real person · archival only</Pill>}
           {scene.ai_disclaimer && <Pill tone="amber">disclaimer</Pill>}
         </div>
@@ -494,6 +498,21 @@ function SceneCard({
         />
 
         <div className="mt-1.5 flex items-center gap-2">
+          {scene.media_kind === "video" ? (
+            <select
+              className="rounded-md border border-white/10 bg-base/70 px-1.5 py-0.5 text-xs text-slate-300 outline-none focus:border-amber/60"
+              value={scene.audio_mode}
+              title="What happens to the clip's own sound"
+              onChange={async (e) => {
+                await api.patch(`/api/scenes/${scene.id}`, { audio_mode: e.target.value });
+                onChanged();
+              }}
+            >
+              <option value="narration">clip muted · voiceover only</option>
+              <option value="soundbite">clip speaks · voiceover pauses</option>
+              <option value="ambient">clip under voiceover · ducked</option>
+            </select>
+          ) : null}
           <span className="truncate text-xs text-slate-500" title={scene.image_prompt}>
             {scene.image_prompt}
           </span>
