@@ -95,6 +95,44 @@ def test_real_person_guard_blocks_ai_generation():
     real_person_guard(depicts_real_person=False, provider_name="placeholder")
 
 
+def test_queue_can_be_restarted_in_one_process():
+    """stop() must not permanently poison the queue.
+
+    The stop flag used to survive a restart, so the second start() spawned
+    workers that exited immediately and every job sat in 'queued' forever.
+    """
+    import time
+
+    from app.db import init_db
+    from app.queue import SqliteJobQueue
+
+    init_db()   # this test does not go through the app lifespan
+    queue = SqliteJobQueue(workers=1, poll_interval=0.05)
+    queue.register("noop", lambda ctx: {"ok": True})
+
+    queue.start()
+    queue.stop()
+    queue.start()
+    try:
+        job_id = queue.submit("noop")
+        deadline = time.time() + 20
+        status = ""
+        while time.time() < deadline:
+            from sqlmodel import Session
+
+            from app.db import engine
+            from app.models import Job
+
+            with Session(engine) as session:
+                status = session.get(Job, job_id).status
+            if status in ("done", "error"):
+                break
+            time.sleep(0.1)
+        assert status == "done", f"job never ran after restart (status={status!r})"
+    finally:
+        queue.stop()
+
+
 def test_spend_ceiling_stops_a_runaway_batch():
     from app.services.tts_service import CostMeter, SpendCeilingReached
 

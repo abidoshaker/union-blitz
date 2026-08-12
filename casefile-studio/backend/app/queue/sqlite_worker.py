@@ -41,6 +41,15 @@ class SqliteJobQueue(JobQueue):
 
     # -- lifecycle --------------------------------------------------------
     def start(self) -> None:
+        # Clearing the flag makes start/stop/start work within one process.
+        # Without it a restarted queue spawns workers that exit immediately and
+        # every job sits in 'queued' forever.
+        self._stopping.clear()
+        self._threads = [t for t in self._threads if t.is_alive()]
+        if self._threads:
+            log.debug("job queue already running")
+            return
+
         self._requeue_orphans()
         for i in range(self._workers):
             t = threading.Thread(target=self._loop, name=f"casefile-worker-{i}", daemon=True)
@@ -52,6 +61,7 @@ class SqliteJobQueue(JobQueue):
         self._stopping.set()
         for t in self._threads:
             t.join(timeout=2.0)
+        self._threads = []
 
     def _requeue_orphans(self) -> None:
         with session_scope() as s:

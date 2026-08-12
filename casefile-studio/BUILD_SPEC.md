@@ -278,7 +278,19 @@ Projects: `GET/POST/PATCH/DELETE /projects`.
 Scripts: `POST /projects/{id}/script`, `POST /projects/{id}/segment`.
 Scenes: `GET/PATCH /scenes` (**paginated — never return 250 scenes in one
 payload**), `POST /scenes/{id}/regenerate-image`,
-`POST /scenes/{id}/regenerate-audio`, `POST /scenes/reorder`.
+`POST /scenes/{id}/regenerate-audio`.
+
+Reordering has two endpoints, and the split matters at this length:
+- `POST /projects/{id}/scenes/move` — `{scene_ids, to_index}`, moves one or
+  several scenes and reindexes server-side. **This is what the storyboard
+  uses**, because the client only ever holds one page of a 240-scene project.
+- `POST /projects/{id}/scenes/reorder` — a full rewrite of the running order,
+  and it **rejects a partial list**. Accepting one would silently renumber the
+  visible page over the top of the rest of the project.
+
+Both keep chapters contiguous: a scene dragged into another chapter joins it,
+rather than interleaving and producing non-monotonic chapter timestamps. Both
+also clear cached `start_time`/`end_time`, which describe the old order.
 Chapters: `GET/PATCH /projects/{id}/chapters`.
 Voices: `GET /voices`, `POST /voices/clone`, `POST /voices/{id}/preview`.
 Assets: `GET /assets`, `POST /assets/upload`, `POST /assets/search`,
@@ -313,6 +325,11 @@ Asset Library · Batch Operations · Render Queue · Settings/API Keys · Export
 - **Filter bar** on the storyboard: "needs image", "no audio yet", "flagged as
   real person", "changed since last render". At this length the user navigates
   by filter, not by scrolling.
+- **Reordering offers three routes**, because dragging is only good for short
+  moves: a drag handle (dnd-kit, keyboard-accessible, autoscrolls, and carries
+  the whole selection when the dragged card is selected), up/down nudge arrows,
+  and a numeric position box for a long jump. Dragging scene 12 to scene 190 by
+  scrolling is not a workflow; typing `190` is.
 - **Render Queue shows scene-level progress** — "scene 138/247, ~41 min left" —
   and a per-step breakdown, not one bar for an hour.
 - **Every long job has a Pause and a Resume.** Rendering an hour is something

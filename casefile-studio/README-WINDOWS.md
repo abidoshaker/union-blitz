@@ -59,10 +59,15 @@ stops the app.
 3. **Storyboard tab.** *Narrate all*, then *Source all images*. Scenes about a
    real named person are flagged with red tape; those get archival photos, and
    AI generation on them is blocked.
-4. **Render tab.** Press **Preview render · first chapter** first. Check the
+4. **Reorder anything that reads out of sequence.** Drag the ⠿ handle on a
+   card, use the ▲▼ arrows for one step, or type a new position into the little
+   number box and press Enter — that last one is the quick way to send a scene
+   from position 12 to position 190. Tick several scenes first and dragging one
+   of them moves the whole group together.
+5. **Render tab.** Press **Preview render · first chapter** first. Check the
    voice, the captions and the pacing on a few minutes before spending hours on
    the whole thing.
-5. When it looks right, **Render the full video**. You get an MP4, an `.srt`,
+6. When it looks right, **Render the full video**. You get an MP4, an `.srt`,
    a chapters file to paste into your YouTube description, and suggested
    mid-roll ad positions.
 

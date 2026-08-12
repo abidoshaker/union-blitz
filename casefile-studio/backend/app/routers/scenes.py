@@ -28,6 +28,11 @@ class ReorderIn(BaseModel):
     scene_ids: list[int]
 
 
+class MoveIn(BaseModel):
+    scene_ids: list[int]
+    to_index: int
+
+
 def _shape(scene: Scene, assets: dict[int, Asset]) -> dict[str, Any]:
     image = assets.get(scene.asset_id or -1)
     audio = assets.get(scene.audio_asset_id or -1)
@@ -114,15 +119,100 @@ def patch_scene(scene_id: int, body: ScenePatch, session: Session = Depends(get_
 
 @router.post("/projects/{project_id}/scenes/reorder")
 def reorder(project_id: int, body: ReorderIn, session: Session = Depends(get_session)) -> dict:
-    scenes = {int(s.id): s for s in session.exec(
-        select(Scene).where(Scene.project_id == project_id)).all()}
-    for index, scene_id in enumerate(body.scene_ids):
-        scene = scenes.get(scene_id)
-        if scene:
+    """Rewrite the whole running order.
+
+    The full set of scene ids is required. The storyboard is paginated, so
+    accepting a partial list would silently renumber one page over the top of
+    the rest of the project.
+    """
+    scenes = _ordered(session, project_id)
+    known = {int(s.id) for s in scenes}
+    given = list(dict.fromkeys(body.scene_ids))
+
+    if set(given) != known:
+        missing, extra = known - set(given), set(given) - known
+        raise HTTPException(
+            400,
+            "Reorder needs every scene in the project. "
+            f"Missing {len(missing)}, unknown {len(extra)}. "
+            "To move a few scenes, use /scenes/move instead.",
+        )
+
+    return _apply_order(session, scenes, given)
+
+
+@router.post("/projects/{project_id}/scenes/move")
+def move(project_id: int, body: MoveIn, session: Session = Depends(get_session)) -> dict:
+    """Move one or more scenes to a new position, keeping their relative order.
+
+    This is what the storyboard uses: the client only ever holds a page of an
+    hour-long project, so it names the scenes that moved and where they land,
+    and the server does the reindexing against the complete list.
+    """
+    scenes = _ordered(session, project_id)
+    order = [int(s.id) for s in scenes]
+    moving = [i for i in dict.fromkeys(body.scene_ids) if i in set(order)]
+    if not moving:
+        raise HTTPException(400, "None of those scenes belong to this project.")
+
+    target = max(0, min(int(body.to_index), len(order) - len(moving)))
+    remainder = [i for i in order if i not in set(moving)]
+    moving.sort(key=order.index)          # preserve their existing relative order
+    new_order = remainder[:target] + moving + remainder[target:]
+
+    return _apply_order(session, scenes, new_order)
+
+
+def _ordered(session: Session, project_id: int) -> list[Scene]:
+    return list(session.exec(
+        select(Scene).where(Scene.project_id == project_id).order_by(Scene.order_index)
+    ).all())
+
+
+def _apply_order(session: Session, scenes: list[Scene], order: list[int]) -> dict[str, Any]:
+    """Write the new indices, fix chapter membership, and drop stale timings."""
+    by_id = {int(s.id): s for s in scenes}
+    moved = 0
+
+    for index, scene_id in enumerate(order):
+        scene = by_id[scene_id]
+        if scene.order_index != index:
             scene.order_index = index
-            session.add(scene)
+            moved += 1
+        # Positions changed, so every cached start/end time is now a lie. They
+        # are recomputed from the narration on the next render.
+        scene.start_time = 0.0
+        scene.end_time = 0.0
+        session.add(scene)
+
+    chapters_changed = _reassign_chapters([by_id[i] for i in order])
     session.commit()
-    return {"reordered": len(body.scene_ids)}
+    return {"reordered": len(order), "moved": moved, "chapters_changed": chapters_changed}
+
+
+def _reassign_chapters(ordered_scenes: list[Scene]) -> int:
+    """Keep chapters contiguous by having each scene adopt its predecessor's.
+
+    A scene dragged from chapter 4 into chapter 1 belongs to chapter 1 now.
+    Without this, chapter membership interleaves and the YouTube chapter
+    timestamps come out in the wrong order.
+    """
+    changed = 0
+    current: int | None = None
+    for i, scene in enumerate(ordered_scenes):
+        if i == 0:
+            current = scene.chapter_id
+            continue
+        if scene.chapter_id != current:
+            # A scene that still leads a run of its own chapter starts it here;
+            # otherwise it joins the chapter it now sits inside.
+            following = ordered_scenes[i + 1].chapter_id if i + 1 < len(ordered_scenes) else None
+            if scene.chapter_id is not None and scene.chapter_id == following:
+                current = scene.chapter_id
+            else:
+                scene.chapter_id = current
+                changed += 1
+    return changed
 
 
 @router.get("/projects/{project_id}/scenes/stats")
