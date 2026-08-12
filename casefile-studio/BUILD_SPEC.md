@@ -1,5 +1,15 @@
 # CaseFile Studio — Build Spec (long-form edition)
 
+> **Status: implemented.** This is no longer only a plan. The backend, the
+> pipeline and the web interface are in this repository and a full
+> paste-script-to-finished-MP4 run is covered by `backend/tests/test_pipeline.py`,
+> which renders a real video offline with no API keys. Phases 1–3 of §14 are
+> built; §14 Phase 4 (GPU encoders, extra providers) is not.
+>
+> Two places where the implementation deliberately departs from this spec are
+> flagged in §15.2 and §7 — both changes exist because the original approach
+> does not survive at hour-long scale.
+
 This supersedes `docs/original-research-spec.md`, which is kept verbatim for
 provenance. Three things changed:
 

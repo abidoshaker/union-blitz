@@ -19,6 +19,11 @@ __pycache__/
 *.py[cod]
 .pytest_cache/
 
-# Node
+# Node. The interface is built by install-deps.bat, not committed.
 node_modules/
 dist/
+frontend/dist/
+.vite/
+
+# TypeScript incremental build cache
+*.tsbuildinfo

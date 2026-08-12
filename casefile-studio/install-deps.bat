@@ -60,30 +60,33 @@ call :log "Root: %ROOT%"
 
 if not exist "%TOOLDIR%" mkdir "%TOOLDIR%" >nul 2>&1
 
-call :step "1/8  Checking for winget"
+call :step "1/9  Checking for winget"
 call :check_winget
 
-call :step "2/8  Python 3.12"
+call :step "2/9  Python 3.12"
 call :ensure_python
 if not defined PYCMD goto fail_python
 
-call :step "3/8  FFmpeg with libx264 and libass"
+call :step "3/9  FFmpeg with libx264 and libass"
 call :ensure_ffmpeg
 
-call :step "4/8  Node.js LTS"
+call :step "4/9  Node.js LTS"
 if "%WANT_NODE%"=="1" (call :ensure_node) else (echo      skipped, --no-node)
 
-call :step "5/8  Virtual environment"
+call :step "5/9  Virtual environment"
 call :ensure_venv
 if not exist "%VPY%" goto fail_venv
 
-call :step "6/8  Python packages"
+call :step "6/9  Python packages"
 call :install_python_packages
 
-call :step "7/8  Voice and transcription models"
+call :step "7/9  Voice and transcription models"
 call :fetch_models
 
-call :step "8/8  Environment check"
+call :step "8/9  Building the web interface"
+if "%WANT_NODE%"=="1" (call :build_frontend) else (echo      skipped, --no-node)
+
+call :step "9/9  Environment check"
 call :write_envfile
 "%VPY%" "%ROOT%\tools\doctor.py"
 
@@ -354,6 +357,38 @@ if errorlevel 1 (
   echo      model download incomplete - run doctor.bat later to retry
   call :markfail models
 )
+exit /b 0
+
+rem --- frontend --------------------------------------------------------------
+:build_frontend
+where npm >nul 2>&1
+if errorlevel 1 (
+  echo      npm not found - the app will run without its web interface
+  call :markfail frontend
+  exit /b 0
+)
+if not exist "%ROOT%\frontend\package.json" (
+  echo      no frontend sources, skipping
+  exit /b 0
+)
+echo      installing web dependencies, this takes a few minutes
+pushd "%ROOT%\frontend"
+call npm install --no-audit --no-fund >> "%LOG%" 2>&1
+if errorlevel 1 (
+  echo      npm install failed - see install-log.txt
+  call :markfail frontend-deps
+  popd
+  exit /b 0
+)
+echo      building the interface
+call npm run build >> "%LOG%" 2>&1
+if errorlevel 1 (
+  echo      frontend build failed - see install-log.txt
+  call :markfail frontend-build
+) else (
+  echo      done
+)
+popd
 exit /b 0
 
 rem --- helpers ---------------------------------------------------------------

@@ -50,6 +50,32 @@ Double-click **`run.bat`**. It starts the app and opens
 <http://localhost:8760>. Leave the black window open while you work — closing it
 stops the app.
 
+## Making your first video
+
+1. **Projects → New project.** One project per video.
+2. **Script tab.** Paste the whole script and press *Split into scenes*. Your
+   text is never rewritten — scenes are cut out of it by position, so what gets
+   narrated is exactly what you wrote.
+3. **Storyboard tab.** *Narrate all*, then *Source all images*. Scenes about a
+   real named person are flagged with red tape; those get archival photos, and
+   AI generation on them is blocked.
+4. **Render tab.** Press **Preview render · first chapter** first. Check the
+   voice, the captions and the pacing on a few minutes before spending hours on
+   the whole thing.
+5. When it looks right, **Render the full video**. You get an MP4, an `.srt`,
+   a chapters file to paste into your YouTube description, and suggested
+   mid-roll ad positions.
+
+You can close the app or restart your PC during a render. It resumes from the
+last finished scene.
+
+### Try it with no API keys at all
+
+A new project defaults to the built-in splitter, a silent draft voice, and
+placeholder images. That produces a real, correctly timed video with captions
+and chapters, so you can see the whole pipeline work before signing up for
+anything. Swap in Fish Audio and real images in Settings when you are ready.
+
 ## If something goes wrong
 
 - Double-click **`doctor.bat`**. It says exactly what is missing.
