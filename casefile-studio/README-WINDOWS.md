@@ -52,6 +52,9 @@ stops the app.
 
 ## Making your first video
 
+0. **Need a script?** `docs/SCRIPT_PROMPT.md` has a ready-made prompt for
+   Claude that produces text shaped for this pipeline — right length, no stage
+   directions, and worded so the app can find matching footage.
 1. **Projects → New project.** One project per video.
 2. **Script tab.** Paste the whole script and press *Split into scenes*. Your
    text is never rewritten — scenes are cut out of it by position, so what gets

@@ -73,6 +73,65 @@ MOOD_BY_TOPIC = {
     "hotel": "hotel corridor dim light",
     "funeral": "cemetery in fog",
     "grave": "cemetery in fog",
+
+    # Drug-trafficking vocabulary. Without these, a scene about a jungle
+    # airstrip or a container port falls through the ladder to a generic dark
+    # street. Every phrase is deliberately non-graphic: evidence tables and
+    # empty places, never product or bodies, because that is what keeps a
+    # true-crime channel monetised.
+    "border": "border crossing checkpoint at night",
+    "checkpoint": "military checkpoint at dusk",
+    "airstrip": "remote dirt airstrip at dusk",
+    "runway": "remote dirt airstrip at dusk",
+    "plane": "small propeller aircraft on a runway",
+    "aircraft": "small propeller aircraft on a runway",
+    "helicopter": "helicopter silhouette over a city at night",
+    "jungle": "dense jungle canopy from the air",
+    "desert": "empty desert highway at dusk",
+    "mountain": "mountain road at dawn mist",
+    "boat": "small boat at sea at night",
+    "vessel": "cargo vessel at sea at dusk",
+    "submarine": "semi submersible boat low in the water",
+    "port": "shipping container port at night",
+    "container": "stacked shipping containers at dusk",
+    "truck": "lorry on a highway at night",
+    "convoy": "convoy of vehicles on a road at night",
+    "tunnel": "underground tunnel lit by bare bulbs",
+    "lab": "improvised chemical laboratory equipment",
+    "laboratory": "improvised chemical laboratory equipment",
+    "cocaine": "wrapped packages on an evidence table",
+    "heroin": "wrapped packages on an evidence table",
+    "narcotics": "wrapped packages on an evidence table",
+    "drugs": "wrapped packages on an evidence table",
+    "drug": "wrapped packages on an evidence table",
+    "trafficking": "wrapped packages on an evidence table",
+    "shipment": "wrapped packages on an evidence table",
+    "seizure": "evidence table under fluorescent light",
+    "raid": "police lights outside a building at night",
+    "arrest": "handcuffs on a metal table",
+    "handcuffs": "handcuffs on a metal table",
+    "extradition": "airport tarmac at night police escort",
+    "surveillance": "surveillance monitors in a dark room",
+    "wiretap": "reel to reel tape recorder close up",
+    "recording": "reel to reel tape recorder close up",
+    "informant": "empty interview room table and chairs",
+    "witness": "empty interview room table and chairs",
+    "indictment": "stacked legal documents on a desk",
+    "prosecutor": "stacked legal documents on a desk",
+    "bank": "bank vault door closed",
+    "vault": "bank vault door closed",
+    "safe": "open safe in a dark room",
+    "cash": "cash bundles on a table low light",
+    "laundering": "bank interior at night empty",
+    "mansion": "empty luxury villa at dusk",
+    "compound": "walled compound gates at dusk",
+    "villa": "empty luxury villa at dusk",
+    "passport": "passport and travel documents on a table",
+    "market": "crowded street market at dusk",
+    "village": "small town main street at dusk",
+    "soldier": "soldiers on patrol silhouette",
+    "military": "soldiers on patrol silhouette",
+    "helicopters": "helicopter silhouette over a city at night",
 }
 
 GENERIC_FALLBACKS = [
@@ -161,8 +220,12 @@ def _topic_terms(text: str) -> list[str]:
     and quietly sources a photo of a vintage car for a scene about paperwork.
     """
     tokens = {w.lower() for w in _WORD.findall(text)}
-    hits = [phrase for keyword, phrase in MOOD_BY_TOPIC.items() if keyword in tokens]
-    return list(dict.fromkeys(hits))
+    hits = [(keyword, phrase) for keyword, phrase in MOOD_BY_TOPIC.items() if keyword in tokens]
+    # Specific beats generic: a scene mentioning an airstrip at night should
+    # search for the airstrip, not the night sky. Longer keywords are the more
+    # particular ones, so they sort first.
+    hits.sort(key=lambda kv: -len(kv[0]))
+    return list(dict.fromkeys(phrase for _keyword, phrase in hits))
 
 
 def _content_words(text: str, limit: int = 5) -> list[str]:
