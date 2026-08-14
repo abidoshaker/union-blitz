@@ -27,11 +27,21 @@ import { Empty, Pill } from "./ui";
 
 const FILTERS = [
   { key: "", label: "All" },
+  // The most useful filter on a finished project: which scenes got generic
+  // B-roll instead of the actual subject, so they can be fixed by hand.
+  { key: "filler", label: "Generic B-roll" },
+  { key: "subject", label: "Matched subject" },
   { key: "needs_image", label: "Needs image" },
   { key: "needs_audio", label: "Needs audio" },
   { key: "real_person", label: "Real person" },
   { key: "ready", label: "Ready" },
 ];
+
+const MATCH_BADGE: Record<string, { tone: "success" | "amber" | "slate"; label: string; hint: string }> = {
+  subject: { tone: "success", label: "subject", hint: "Found by searching a name, place or date from your script" },
+  atmosphere: { tone: "amber", label: "atmosphere", hint: "Mood B-roll matching a topic in the script — not the actual event" },
+  filler: { tone: "slate", label: "filler", hint: "Generic fallback — nothing in the script matched. Worth replacing." },
+};
 
 const PAGE = 60;
 const ROW = 208;
@@ -499,6 +509,13 @@ function SceneCard({
             {scene.has_audio ? "audio" : "no audio"}
           </Pill>
           {scene.blur_faces && <Pill tone="magenta">faces blurred</Pill>}
+          {scene.match_level && MATCH_BADGE[scene.match_level] && (
+            <span title={`${MATCH_BADGE[scene.match_level].hint}${scene.source_query ? `\n\nSearched: ${scene.source_query}` : ""}`}>
+              <Pill tone={MATCH_BADGE[scene.match_level].tone}>
+                {MATCH_BADGE[scene.match_level].label}
+              </Pill>
+            </span>
+          )}
           {scene.depicts_real_person && <Pill tone="danger">real person · archival only</Pill>}
           {scene.ai_disclaimer && <Pill tone="amber">disclaimer</Pill>}
         </div>
@@ -528,8 +545,17 @@ function SceneCard({
               <option value="ambient">clip under voiceover · ducked</option>
             </select>
           ) : null}
-          <span className="truncate text-xs text-slate-500" title={scene.image_prompt}>
-            {scene.image_prompt}
+          {/* What actually found this picture beats what we asked for, once a
+              picture exists - it is the thing you judge the frame against. */}
+          <span
+            className="truncate text-xs text-slate-500"
+            title={
+              scene.source_query
+                ? `Found by: ${scene.source_query}\n\nBrief: ${scene.image_prompt}`
+                : scene.image_prompt
+            }
+          >
+            {scene.source_query || scene.image_prompt}
           </span>
           {dirty && (
             <button className="btn-amber ml-auto !px-3 !py-1 text-xs" onClick={save}>

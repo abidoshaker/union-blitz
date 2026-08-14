@@ -7,7 +7,8 @@ from functools import lru_cache
 from .ai import FalFluxProvider, OpenAIImageProvider, PlaceholderProvider
 from .base import AssetCandidate, ImageProvider, ImageUnavailable
 from .stock import (
-    InternetArchiveImageProvider, PexelsProvider, PixabayProvider, WikimediaProvider,
+    InternetArchiveImageProvider, LibraryOfCongressProvider, NationalArchivesProvider,
+    PexelsProvider, PixabayProvider, WikimediaProvider,
 )
 
 __all__ = [
@@ -20,14 +21,19 @@ DEFAULT_STOCK = "pexels"
 DEFAULT_AI = "placeholder"
 # Where a scene flagged `depicts_real_person` is allowed to source from,
 # most archival first.
-ARCHIVAL_PROVIDERS = ("internet_archive_image", "wikimedia", "pexels", "pixabay")
+# Tried in order for a scene with a real subject. US federal records first:
+# they are public domain and most likely to be the actual event.
+ARCHIVAL_PROVIDERS = (
+    "nara", "loc", "wikimedia", "internet_archive_image", "pexels", "pixabay",
+)
 
 
 @lru_cache(maxsize=1)
 def _registry() -> dict[str, ImageProvider]:
     providers: list[ImageProvider] = [
         PexelsProvider(), PixabayProvider(), WikimediaProvider(),
-        InternetArchiveImageProvider(),
+        InternetArchiveImageProvider(), LibraryOfCongressProvider(),
+        NationalArchivesProvider(),
         OpenAIImageProvider(), FalFluxProvider(), PlaceholderProvider(),
     ]
     return {p.name: p for p in providers}

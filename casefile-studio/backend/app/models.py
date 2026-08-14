@@ -79,6 +79,14 @@ class Scene(SQLModel, table=True):
     audio_mode: str = "narration"
     blur_faces: bool = False
 
+    # How the picture was found, so the storyboard can say whether a scene got
+    # the actual subject or generic B-roll:
+    #   subject     searched a name, place or date from the script
+    #   atmosphere  searched a topic the script mentions
+    #   filler      generic fallback - nothing specific matched
+    match_level: str = ""
+    source_query: str = ""
+
     kenburns: str = "auto"
     status: str = "new"                   # new | audio_ready | visual_ready | ready | error
     content_hash: str = ""

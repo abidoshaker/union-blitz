@@ -57,6 +57,8 @@ def _shape(scene: Scene, assets: dict[int, Asset]) -> dict[str, Any]:
         "media_in": scene.media_in,
         "audio_mode": scene.audio_mode,
         "blur_faces": scene.blur_faces,
+        "match_level": scene.match_level,
+        "source_query": scene.source_query,
         "kenburns": scene.kenburns,
         "status": scene.status,
         "duration": scene.duration,
@@ -92,6 +94,11 @@ def list_scenes(
         stmt = stmt.where(Scene.audio_asset_id.is_(None))
     elif filter == "real_person":
         stmt = stmt.where(Scene.depicts_real_person == True)  # noqa: E712
+    elif filter == "filler":
+        # The scenes worth looking at by hand: generic B-roll, not the subject.
+        stmt = stmt.where(Scene.match_level.in_(["filler", "atmosphere"]))
+    elif filter == "subject":
+        stmt = stmt.where(Scene.match_level == "subject")
     elif filter in ("ready", "error", "new"):
         stmt = stmt.where(Scene.status == filter)
 
@@ -341,6 +348,27 @@ def search_images(scene_id: int, body: SearchIn,
         raise HTTPException(502, str(exc)) from exc
 
 
+class FromUrlIn(BaseModel):
+    url: str
+    attribution: str = ""
+
+
+@router.post("/scenes/{scene_id}/image-from-url")
+def image_from_url(scene_id: int, body: FromUrlIn,
+                   session: Session = Depends(get_session)) -> dict:
+    """Use a picture you have already downloaded or licensed, by address."""
+    scene = session.get(Scene, scene_id)
+    if not scene:
+        raise HTTPException(404, "Scene not found")
+    try:
+        return scene_service.fetch_from_url(session, scene, body.url,
+                                            attribution=body.attribution)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Could not fetch that image: {exc}") from exc
+
+
 @router.post("/scenes/{scene_id}/choose-image")
 def choose_image(scene_id: int, body: ChooseIn,
                  session: Session = Depends(get_session)) -> dict:
@@ -358,6 +386,34 @@ def choose_image(scene_id: int, body: ChooseIn,
         raise HTTPException(409, str(exc)) from exc
     except Exception as exc:
         raise HTTPException(502, f"Could not use that image: {exc}") from exc
+
+
+class GenerateIn(BaseModel):
+    provider: str = "placeholder"
+    prompt: str | None = None
+
+
+@router.post("/scenes/{scene_id}/generate-image")
+def generate_image(scene_id: int, body: GenerateIn,
+                   session: Session = Depends(get_session)) -> dict:
+    """Make an AI picture for this scene.
+
+    Blocked on scenes flagged as showing a real person - that guard lives in
+    the service layer so it cannot be routed around from here.
+    """
+    scene = session.get(Scene, scene_id)
+    if not scene:
+        raise HTTPException(404, "Scene not found")
+    try:
+        return scene_service.generate_image(
+            session, scene, provider_name=body.provider, prompt=body.prompt,
+        )
+    except image_service.RealPersonBlocked as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Could not generate that image: {exc}") from exc
 
 
 @router.post("/scenes/{scene_id}/upload-image")

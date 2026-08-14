@@ -32,6 +32,8 @@ PROVIDER_INFO = {
                "url": "https://www.pexels.com/api/", "required": False},
     "pixabay": {"label": "Pixabay", "what": "Free stock photos", "cost": "Free",
                 "url": "https://pixabay.com/api/docs/", "required": False},
+    "nara": {"label": "US National Archives", "what": "Public-domain photos from DEA, FBI and other federal agencies",
+             "cost": "Free", "url": "https://catalog.archives.gov/api-search", "required": False},
     "fal": {"label": "fal.ai", "what": "Flux AI images for B-roll",
             "cost": "About $0.03 per image", "url": "https://fal.ai", "required": False},
 }

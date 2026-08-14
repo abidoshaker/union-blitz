@@ -142,7 +142,54 @@ blur anything it missed by hand.
 | Anthropic or OpenAI | splitting the script into scenes | a few cents per script |
 | Pexels / Pixabay | free stock photos **and video clips** | free |
 | Internet Archive | archival footage, no key needed | free |
+| Library of Congress | US archival photographs, no key needed | free |
+| US National Archives | federal records and photographs (DEA, FBI, customs) | free key from catalog.archives.gov |
 | fal.ai or OpenAI images | optional AI B-roll | ~$0.03 per image |
+
+## Where the pictures come from, and how to tell
+
+Every scene carries a badge saying what kind of picture it got:
+
+* **Matched subject** — it came from an archive on a search that named the
+  actual place, person or year in the line. This is as close as the app gets
+  to a photograph of the event.
+* **Atmosphere** — a stock library picture chosen for mood. Right feeling,
+  wrong specifics.
+* **Generic B-roll** — a fallback. Nothing in the line was searchable, so it
+  took something neutral.
+
+Hover the badge to see the exact words that found the picture. The
+**Generic B-roll** filter above the storyboard collects everything that needs
+a human eye.
+
+Scenes that name a real place, person or year are sent to the archives first —
+National Archives, Library of Congress, Wikimedia, Internet Archive, in that
+order — and only fall through to stock libraries if none of them has anything.
+
+**A warning worth repeating:** the famous press photographs of most arrests
+are owned by AP, Reuters or Getty, and this app has no scraper. If a free
+archival copy does not exist, no amount of searching will produce one. The
+honest options are then: buy the picture, use atmosphere and say so, or use
+the **Change picture** tools below.
+
+## Replacing a picture you are not happy with
+
+Open any scene and press **Change picture**. Four ways in:
+
+* **Search libraries** — the archives are marked with a green dot; those are
+  the ones that may hold the real thing. The rest are mood.
+* **Make with AI** — a dramatisation, not a record. Turn on the disclaimer
+  overlay for scenes that use one. This is **blocked on scenes flagged as
+  showing a real person**, in the server, so it cannot be worked around from
+  the interface.
+* **From a link** — paste the address of an image you have already licensed
+  or downloaded. The app records it as supplied by you; checking you have the
+  right to publish it is on you.
+* **Upload mine** — the same, from a file on your machine.
+
+Anything you choose by hand is marked **Matched subject**, because you chose
+it. Changing a picture throws away that scene's preview so the next **Watch**
+shows the new one.
 
 Kokoro and Edge-TTS need no key at all, and are the right way to hear a full
 draft before spending anything.

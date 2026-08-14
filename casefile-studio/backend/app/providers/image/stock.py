@@ -188,3 +188,142 @@ class InternetArchiveImageProvider(ImageProvider):
                     kind="image",
                 ))
         return out
+
+
+class LibraryOfCongressProvider(ImageProvider):
+    """Library of Congress photographs. No API key.
+
+    A large share of the collection is public domain, and it is one of the best
+    free sources of genuine period photography - press photos, government
+    files, news morgue collections. For a US-linked case this is usually where
+    an actual photograph of the event will be, if one is free at all.
+    """
+
+    name = "loc"
+    label = "Library of Congress"
+    kind = "stock"
+    requires_attribution = True
+
+    def available(self) -> tuple[bool, str]:
+        return True, ""
+
+    def search(self, query: str, *, count: int = 12, opts: dict | None = None) -> list[AssetCandidate]:
+        with httpx.Client(timeout=45, follow_redirects=True,
+                          headers={"User-Agent": "CaseFileStudio/1.0"}) as client:
+            resp = client.get(
+                "https://www.loc.gov/photos/",
+                params={"q": query, "fo": "json", "c": str(min(max(count, 5), 40)), "at": "results"},
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+        return _parse_loc(payload, count)
+
+
+def _parse_loc(payload: dict, count: int) -> list[AssetCandidate]:
+    out: list[AssetCandidate] = []
+    for item in (payload.get("results") or []):
+        if len(out) >= count:
+            break
+        urls = [u for u in (item.get("image_url") or []) if isinstance(u, str)]
+        if not urls:
+            continue
+        # The list runs small to large, so the last entry is the best copy.
+        # Many are protocol-relative.
+        best = urls[-1]
+        if best.startswith("//"):
+            best = "https:" + best
+        thumb = urls[0]
+        if thumb.startswith("//"):
+            thumb = "https:" + thumb
+
+        rights = item.get("rights") or item.get("rights_advisory") or "See loc.gov item page"
+        if isinstance(rights, list):
+            rights = "; ".join(str(r) for r in rights[:2])
+        title = item.get("title") or "Library of Congress item"
+        if isinstance(title, list):
+            title = title[0] if title else "Library of Congress item"
+
+        out.append(AssetCandidate(
+            url=best, thumb=thumb,
+            license=str(rights)[:300],
+            attribution=f"{title} - Library of Congress",
+            provider="loc",
+            title=str(title)[:200],
+            kind="image",
+        ))
+    return out
+
+
+class NationalArchivesProvider(ImageProvider):
+    """US National Archives (NARA) catalog.
+
+    Records created by US federal agencies - DEA, FBI, DOJ, US Marshals - are
+    generally public domain as works of the US government, which makes this the
+    single best free source for arrests, seizures and extraditions that
+    involved a US agency.
+
+    The catalog API wants a key (free from NARA). Without one the adapter says
+    so rather than failing mid-render.
+    """
+
+    name = "nara"
+    label = "US National Archives"
+    kind = "stock"
+    requires_attribution = True
+
+    def available(self) -> tuple[bool, str]:
+        if not get_key("nara"):
+            return False, "No National Archives API key yet - they are free from catalog.archives.gov."
+        return True, ""
+
+    def search(self, query: str, *, count: int = 12, opts: dict | None = None) -> list[AssetCandidate]:
+        key = get_key("nara")
+        if not key:
+            raise ImageUnavailable("No National Archives API key.")
+        with httpx.Client(timeout=45, follow_redirects=True,
+                          headers={"User-Agent": "CaseFileStudio/1.0", "x-api-key": key}) as client:
+            resp = client.get(
+                "https://catalog.archives.gov/api/v2/records/search",
+                params={"q": query, "limit": str(min(max(count, 5), 50))},
+            )
+            resp.raise_for_status()
+            payload = resp.json()
+        return _parse_nara(payload, count)
+
+
+IMAGE_SUFFIXES = (".jpg", ".jpeg", ".png", ".tif", ".tiff", ".gif")
+
+
+def _parse_nara(payload: dict, count: int) -> list[AssetCandidate]:
+    """Pull image objects out of a NARA catalog response.
+
+    Written defensively: the catalog's shape varies by record type and a
+    missing key here should cost one result, not the whole search.
+    """
+    hits = (((payload.get("body") or {}).get("hits") or {}).get("hits")) or []
+    out: list[AssetCandidate] = []
+    for hit in hits:
+        if len(out) >= count:
+            break
+        record = ((hit.get("_source") or {}).get("record")) or {}
+        title = record.get("title") or "National Archives record"
+        objects = record.get("digitalObjects") or []
+        chosen = None
+        for obj in objects:
+            url = str(obj.get("objectUrl") or "")
+            if url.lower().endswith(IMAGE_SUFFIXES):
+                chosen = obj
+                break
+        if not chosen:
+            continue
+        naid = record.get("naId") or hit.get("_id") or ""
+        out.append(AssetCandidate(
+            url=str(chosen.get("objectUrl")),
+            thumb=str(chosen.get("thumbnailUrl") or chosen.get("objectUrl")),
+            license="Work of the US federal government - generally public domain; check the record",
+            attribution=f"{title} - US National Archives (NAID {naid})",
+            provider="nara",
+            title=str(title)[:200],
+            kind="image",
+        ))
+    return out

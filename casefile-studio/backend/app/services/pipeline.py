@@ -294,7 +294,7 @@ def handle_images(ctx: JobContext) -> dict[str, Any]:
 
     wanted_video = _plan_video_scenes(rows, cfg)
     used_urls: set[str] = set()
-    counts = {"images": 0, "videos": 0, "blurred": 0, "faces": 0}
+    counts = {"images": 0, "videos": 0, "blurred": 0, "faces": 0, "subject_hits": 0}
     failures: list[str] = []
 
     # Stills are pooled per chapter; clips are per scene because a repeated
@@ -417,39 +417,74 @@ def _source_video_for(project_id: int, row: dict, cfg: dict[str, Any],
             scene.media_in = video_service.pick_in_point(stored.duration, needed)
             scene.audio_mode = audio_mode
             scene.blur_faces = should_blur
-            scene.notes = (scene.notes or "") if scene.notes else f"query: {chosen_query}"
+            scene.match_level = queries.classify(chosen_query)
+            scene.source_query = chosen_query
             session.add(scene)
     counts["videos"] += 1
 
 
 def _source_image_for(project_id: int, row: dict, cfg: dict[str, Any],
                       used: set[str], counts: dict[str, int], pools: dict) -> None:
-    from ..providers.image import get_provider
+    from ..providers.image import ARCHIVAL_PROVIDERS, get_provider
 
-    provider_name = _archival_provider(cfg) if row["real"] else str(cfg["visual_source"])
-    provider = get_provider(provider_name)
+    queries = query.build(row["text"], row["prompt"])
+    # A scene naming a person, a place or a year is worth asking an archive
+    # about even when it is not flagged as a person. "Cartagena 1991" is a real
+    # lead; sending it straight to a stock library guarantees generic B-roll.
+    wants_archive = row["real"] or queries.has_strong_subject
 
-    if provider.kind == "ai":
-        stored = image_service.source_image(
-            project_id=project_id, prompt=row["prompt"], provider_name=provider_name,
-            depicts_real_person=row["real"],
-        )
-    else:
-        queries = query.build(row["text"], row["prompt"])
-        candidate = None
-        for term in queries.ladder(prefer_archival=row["real"])[:5]:
+    plan: list[tuple[str, bool]] = []      # (provider name, archival attempt)
+    if wants_archive:
+        preferred = str(cfg.get("archival_source") or "")
+        names = (preferred,) + ARCHIVAL_PROVIDERS if preferred else ARCHIVAL_PROVIDERS
+        for name in dict.fromkeys(names):
+            if name and get_provider(name).available()[0]:
+                plan.append((name, True))
+                if len(plan) >= 3:
+                    break
+    if not row["real"]:
+        plan.append((str(cfg["visual_source"]), False))
+
+    if not plan:
+        raise RuntimeError("no image source is configured or available")
+
+    stored = None
+    matched_term, match_level = "", query.MATCH_FILLER
+
+    for provider_name, archival in plan:
+        provider = get_provider(provider_name)
+        if provider.kind == "ai":
+            stored = image_service.source_image(
+                project_id=project_id, prompt=row["prompt"], provider_name=provider_name,
+                depicts_real_person=row["real"],
+            )
+            matched_term, match_level = row["prompt"][:120], query.MATCH_ATMOSPHERE
+            break
+
+        # An archival attempt only tries the subject rungs. Asking the National
+        # Archives for "rain on a window at night" wastes a request and returns
+        # something worse than a stock library would.
+        terms = queries.archival[:3] if archival else queries.ladder(prefer_archival=False)[:5]
+        for term in terms:
             try:
                 results = provider.search(term, count=12)
             except Exception as exc:
-                log.debug("image search %r failed: %s", term, exc)
+                log.debug("image search %r on %s failed: %s", term, provider_name, exc)
                 continue
             candidate = query.pick(results, query=term, used=used)
             if candidate:
+                used.add(candidate.url)
+                stored = image_service.store_candidate(project_id, candidate)
+                matched_term = term
+                match_level = query.MATCH_SUBJECT if archival else queries.classify(term)
                 break
-        if candidate is None:
-            raise RuntimeError("no image results for any query in the ladder")
-        used.add(candidate.url)
-        stored = image_service.store_candidate(project_id, candidate)
+        if stored:
+            break
+
+    if stored is None:
+        raise RuntimeError("no image results for any query in the ladder")
+    if match_level == query.MATCH_SUBJECT:
+        counts["subject_hits"] = counts.get("subject_hits", 0) + 1
 
     blur_policy = str(cfg.get("blur_faces", "real_person"))
     should_blur = blur_policy == "all" or (blur_policy == "real_person" and row["real"])
@@ -467,12 +502,14 @@ def _source_image_for(project_id: int, row: dict, cfg: dict[str, Any],
             log.warning("face blur failed on %s: %s", stored.path.name, exc)
 
     _attach_asset(project_id, row["id"], stored,
-                  blurred_path=blurred_path, faces=faces, blur=should_blur)
+                  blurred_path=blurred_path, faces=faces, blur=should_blur,
+                  match_level=match_level, source_query=matched_term)
     counts["images"] += 1
 
 
 def _attach_asset(project_id: int, scene_id: int, stored: image_service.StoredImage,
-                  *, blurred_path: str = "", faces: int = 0, blur: bool = False) -> None:
+                  *, blurred_path: str = "", faces: int = 0, blur: bool = False,
+                  match_level: str = "", source_query: str = "") -> None:
     with session_scope() as session:
         asset = session.exec(
             select(Asset).where(Asset.project_id == project_id,
@@ -498,6 +535,9 @@ def _attach_asset(project_id: int, scene_id: int, stored: image_service.StoredIm
             scene.asset_id = int(asset.id)
             scene.media_kind = "image"
             scene.blur_faces = blur
+            if match_level:
+                scene.match_level = match_level
+                scene.source_query = source_query
             scene.status = "visual_ready" if scene.status == "audio_ready" else scene.status
             session.add(scene)
 

@@ -264,7 +264,12 @@ def apply_image(session: Session, scene: Scene, candidate: AssetCandidate) -> di
 
     scene.asset_id = int(asset.id)
     scene.media_kind = "image"
-    scene.visual_source = "upload" if stored.provider == "upload" else "stock"
+    # A picture you supplied yourself - by file or by link - is not stock, and
+    # the provenance column should not claim it is.
+    scene.visual_source = "upload" if stored.provider in ("upload", "manual") else "stock"
+    if stored.provider in ("upload", "manual"):
+        scene.match_level = "subject"    # you chose it, so it is the subject
+        scene.source_query = "chosen by hand"
     session.add(scene)
     session.commit()
 
@@ -273,6 +278,50 @@ def apply_image(session: Session, scene: Scene, candidate: AssetCandidate) -> di
         "asset_id": int(asset.id), "faces_blurred": faces,
         "license": stored.license, "attribution": stored.attribution,
     }
+
+
+def generate_image(session: Session, scene: Scene, *, provider_name: str,
+                   prompt: str | None = None) -> dict[str, Any]:
+    """Generate a picture for one scene and attach it."""
+    image_service.real_person_guard(
+        depicts_real_person=scene.depicts_real_person, provider_name=provider_name,
+    )
+    provider = get_image_provider(provider_name)
+    usable, reason = provider.available()
+    if not usable:
+        raise ValueError(reason)
+    if provider.kind != "ai":
+        raise ValueError(f"{provider.label} does not generate images - search it instead.")
+
+    wording = (prompt or scene.image_prompt or scene.text[:160]).strip()
+    candidate = provider.generate(wording)
+    result = apply_image(session, scene, candidate)
+
+    scene.visual_source = "ai"
+    scene.match_level = "atmosphere"
+    scene.source_query = wording[:160]
+    session.add(scene)
+    session.commit()
+    return {**result, "prompt": wording}
+
+
+def fetch_from_url(session: Session, scene: Scene, url: str, *,
+                   attribution: str = "") -> dict[str, Any]:
+    """Use a picture from a URL you already have the rights to."""
+    if not url.lower().startswith(("http://", "https://")):
+        raise ValueError("That does not look like a web address.")
+    candidate = AssetCandidate(
+        url=url, provider="manual",
+        license="Supplied by the user - you are responsible for the rights",
+        attribution=attribution or "Supplied by the user",
+        title=url.rsplit("/", 1)[-1][:120],
+    )
+    result = apply_image(session, scene, candidate)
+    scene.match_level = "subject"     # a picture chosen by hand is the subject
+    scene.source_query = "chosen by hand"
+    session.add(scene)
+    session.commit()
+    return result
 
 
 def _drop_preview(project_id: int, scene_id: int) -> None:

@@ -355,3 +355,81 @@ def test_a_short_bed_cannot_truncate_the_master(clips, tmp_path):
         total_sec=voice_len,
     )
     assert abs(ffmpeg.duration_of(master) - voice_len) < 0.15
+
+
+# ---------------------------------------------------------------------------
+# Provenance: did a scene get the actual subject, or generic B-roll?
+# ---------------------------------------------------------------------------
+
+def test_a_place_and_a_year_count_as_a_real_subject():
+    """The gap that sent Cartagena 1991 to a stock library."""
+    q = query.build("The shipment left the container port at Cartagena in March of 1991.")
+    assert q.has_strong_subject
+    assert q.ladder(prefer_archival=True)[0].startswith("Cartagena")
+
+
+def test_a_scene_with_no_names_is_not_sent_to_an_archive():
+    q = query.build("Nobody spoke for a long moment afterwards.")
+    assert not q.has_strong_subject
+
+
+def test_a_lone_capitalised_word_is_too_weak_for_an_archive():
+    """Archives are full of people called Smith; one bare name is not a lead."""
+    q = query.build("Smith walked away from the building.")
+    assert q.entities == ["Smith"]
+    assert not q.has_strong_subject
+
+
+def test_match_levels_describe_where_the_picture_came_from():
+    q = query.build("Pablo Escobar was arrested in Medellin in 1993 outside the warehouse.")
+    assert q.classify("Pablo Escobar 1993") == query.MATCH_SUBJECT
+    assert q.classify("abandoned warehouse interior night") == query.MATCH_ATMOSPHERE
+    assert q.classify("dark empty street at night") == query.MATCH_FILLER
+
+
+# ---------------------------------------------------------------------------
+# Archival adapters, parsed against recorded response shapes
+# ---------------------------------------------------------------------------
+
+def test_library_of_congress_parsing():
+    from app.providers.image.stock import _parse_loc
+
+    payload = {"results": [
+        {"title": "Police raid, 1936", "image_url": ["//tile.loc.gov/small.jpg",
+                                                     "//tile.loc.gov/large.jpg"],
+         "rights": "No known restrictions on publication."},
+        {"title": "No image here", "image_url": []},
+    ]}
+    out = _parse_loc(payload, 10)
+    assert len(out) == 1
+    # Protocol-relative URLs must be made absolute, and the largest copy wins.
+    assert out[0].url == "https://tile.loc.gov/large.jpg"
+    assert out[0].thumb == "https://tile.loc.gov/small.jpg"
+    assert "No known restrictions" in out[0].license
+    assert out[0].provider == "loc"
+
+
+def test_national_archives_parsing_skips_non_images():
+    from app.providers.image.stock import _parse_nara
+
+    payload = {"body": {"hits": {"hits": [
+        {"_source": {"record": {"title": "DEA seizure photograph", "naId": "12345",
+                                "digitalObjects": [{"objectUrl": "https://catalog.archives.gov/a.pdf"},
+                                                   {"objectUrl": "https://catalog.archives.gov/b.jpg"}]}}},
+        {"_source": {"record": {"title": "Paper only", "naId": "999",
+                                "digitalObjects": [{"objectUrl": "https://catalog.archives.gov/c.pdf"}]}}},
+        {"_source": {}},
+    ]}}}
+    out = _parse_nara(payload, 10)
+    assert len(out) == 1
+    assert out[0].url.endswith("b.jpg")
+    assert "12345" in out[0].attribution
+
+
+def test_archive_adapters_survive_a_shape_they_did_not_expect():
+    from app.providers.image.stock import _parse_loc, _parse_nara
+
+    assert _parse_loc({}, 5) == []
+    assert _parse_loc({"results": [{}]}, 5) == []
+    assert _parse_nara({}, 5) == []
+    assert _parse_nara({"body": {"hits": {"hits": [{"_source": {"record": {}}}]}}}, 5) == []

@@ -285,6 +285,21 @@ width, height)`.
   indemnification), Unsplash (**must** send attribution and fire the
   download-tracking endpoint), Wikimedia Commons, Library of Congress,
   Internet Archive.
+- **Archive-first routing (implemented).** `ARCHIVAL_PROVIDERS` is ordered
+  `nara, loc, wikimedia, internet_archive_image, pexels, pixabay`: US federal
+  records first, because arrests, seizures and court exhibits in American
+  cases are federal work product and therefore public domain. A scene is
+  routed to the archives when it is flagged `depicts_real_person` **or** when
+  `QuerySet.has_strong_subject` holds — a named entity plus a year, or a
+  multi-word proper name. Archival attempts use only `queries.archival[:3]`
+  (the specific end of the ladder); sending "atmospheric establishing shot" to
+  the National Archives wastes a call and returns noise.
+- **Provenance marking (implemented).** Every scene records `match_level`
+  (`subject` / `atmosphere` / `filler`) and `source_query`, so the storyboard
+  can say plainly whether the frame is a record of the event or a mood
+  substitute, and the "Generic B-roll" filter collects everything needing a
+  human eye. Hand-chosen pictures — upload, link, picked from search — are
+  marked `subject`, since the choice was made by a person.
 - **AI:** fal.ai Flux (~$0.025 Schnell / ~$0.05 Pro), Replicate Flux, OpenAI
   gpt-image (~$0.005 mini / ~$0.04 std), Google Imagen 4 ($0.02 / $0.04 / $0.06,
   SynthID-watermarked), Ideogram 3 (~$0.03).

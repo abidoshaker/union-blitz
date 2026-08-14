@@ -83,13 +83,24 @@ interface Candidate {
   title: string;
 }
 
+// Archives first: these are where an actual photograph of the event will be,
+// if a free one exists at all. Stock libraries below them are mood, not record.
 const SOURCES = [
-  { key: "internet_archive_image", label: "Internet Archive" },
-  { key: "wikimedia", label: "Wikimedia" },
-  { key: "pexels", label: "Pexels" },
-  { key: "pixabay", label: "Pixabay" },
-  { key: "placeholder", label: "Placeholder" },
+  { key: "nara", label: "US National Archives", archival: true },
+  { key: "loc", label: "Library of Congress", archival: true },
+  { key: "wikimedia", label: "Wikimedia", archival: true },
+  { key: "internet_archive_image", label: "Internet Archive", archival: true },
+  { key: "pexels", label: "Pexels", archival: false },
+  { key: "pixabay", label: "Pixabay", archival: false },
 ];
+
+const AI_SOURCES = [
+  { key: "openai_image", label: "OpenAI" },
+  { key: "fal_flux", label: "Flux (fal.ai)" },
+  { key: "placeholder", label: "Placeholder (free, offline)" },
+];
+
+type Mode = "search" | "generate" | "url";
 
 /** Pick a different picture for one scene, or upload your own. */
 export function ImagePicker({
@@ -101,9 +112,11 @@ export function ImagePicker({
   onClose: () => void;
   onApplied: () => void;
 }) {
-  const [provider, setProvider] = useState(
-    scene.depicts_real_person ? "internet_archive_image" : "pexels",
-  );
+  const [mode, setMode] = useState<Mode>("search");
+  const [provider, setProvider] = useState(scene.depicts_real_person ? "wikimedia" : "pexels");
+  const [aiProvider, setAiProvider] = useState("placeholder");
+  const [prompt, setPrompt] = useState(scene.image_prompt || "");
+  const [url, setUrl] = useState("");
   const [term, setTerm] = useState("");
   const [usedQuery, setUsedQuery] = useState("");
   const [results, setResults] = useState<Candidate[]>([]);
@@ -133,9 +146,42 @@ export function ImagePicker({
   };
 
   useEffect(() => {
-    search();
+    // A message about a missing search key means nothing on the AI tab.
+    setNote("");
+    if (mode === "search") search();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [provider]);
+  }, [provider, mode]);
+
+  const generate = async () => {
+    setBusy(true);
+    setNote("");
+    try {
+      await api.post(`/api/scenes/${scene.id}/generate-image`, {
+        provider: aiProvider,
+        prompt: prompt || undefined,
+      });
+      onApplied();
+      onClose();
+    } catch (err) {
+      setNote((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const fromUrl = async () => {
+    setBusy(true);
+    setNote("");
+    try {
+      await api.post(`/api/scenes/${scene.id}/image-from-url`, { url });
+      onApplied();
+      onClose();
+    } catch (err) {
+      setNote((err as Error).message);
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const choose = async (candidate: Candidate) => {
     setBusy(true);
@@ -190,31 +236,20 @@ export function ImagePicker({
           </Banner>
         )}
 
-        <div className="flex flex-wrap gap-2">
-          {SOURCES.map((s) => (
+        <div className="flex gap-1 rounded-xl bg-white/5 p-1">
+          {(["search", "generate", "url"] as Mode[]).map((m) => (
             <button
-              key={s.key}
-              className={s.key === provider ? "btn-amber" : "btn-ghost"}
-              onClick={() => setProvider(s.key)}
+              key={m}
+              onClick={() => setMode(m)}
+              className={`rounded-lg px-4 py-1.5 text-sm font-semibold transition-colors ${
+                mode === m ? "bg-accent text-white" : "text-slate-300 hover:bg-white/5"
+              }`}
             >
-              {s.label}
+              {m === "search" ? "Search libraries" : m === "generate" ? "Make with AI" : "From a link"}
             </button>
           ))}
-        </div>
-
-        <div className="flex gap-2">
-          <input
-            className="input"
-            placeholder={usedQuery ? `Searched: ${usedQuery}` : "Search words…"}
-            value={term}
-            onChange={(e) => setTerm(e.target.value)}
-            onKeyDown={(e) => e.key === "Enter" && search()}
-          />
-          <button className="btn-primary shrink-0" onClick={search} disabled={busy}>
-            Search
-          </button>
           <button
-            className="btn-ghost shrink-0"
+            className="btn-ghost ml-auto"
             onClick={() => fileRef.current?.click()}
             disabled={busy}
           >
@@ -228,6 +263,89 @@ export function ImagePicker({
             onChange={(e) => e.target.files?.[0] && upload(e.target.files[0])}
           />
         </div>
+
+        {mode === "search" && (
+          <>
+            <div className="flex flex-wrap gap-2">
+              {SOURCES.map((s) => (
+                <button
+                  key={s.key}
+                  className={s.key === provider ? "btn-amber" : "btn-ghost"}
+                  title={s.archival ? "Archival — may hold the actual event" : "Stock — mood, not record"}
+                  onClick={() => setProvider(s.key)}
+                >
+                  {s.archival && <span className="mr-1 text-[10px] text-success">●</span>}
+                  {s.label}
+                </button>
+              ))}
+            </div>
+            <div className="flex gap-2">
+              <input
+                className="input"
+                placeholder={usedQuery ? `Searched: ${usedQuery}` : "Search words…"}
+                value={term}
+                onChange={(e) => setTerm(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && search()}
+              />
+              <button className="btn-primary shrink-0" onClick={search} disabled={busy}>
+                Search
+              </button>
+            </div>
+          </>
+        )}
+
+        {mode === "generate" && (
+          <div className="space-y-2">
+            <div className="flex flex-wrap gap-2">
+              {AI_SOURCES.map((s) => (
+                <button
+                  key={s.key}
+                  className={s.key === aiProvider ? "btn-amber" : "btn-ghost"}
+                  onClick={() => setAiProvider(s.key)}
+                >
+                  {s.label}
+                </button>
+              ))}
+            </div>
+            <textarea
+              className="input h-24 resize-none text-sm"
+              placeholder="Describe the picture you want…"
+              value={prompt}
+              onChange={(e) => setPrompt(e.target.value)}
+            />
+            <button
+              className="btn-primary"
+              onClick={generate}
+              disabled={busy || scene.depicts_real_person}
+            >
+              {scene.depicts_real_person ? "Blocked on real-person scenes" : "Generate"}
+            </button>
+            <p className="text-xs text-slate-500">
+              A dramatisation, not a record. Turn on the disclaimer overlay for scenes that use one.
+            </p>
+          </div>
+        )}
+
+        {mode === "url" && (
+          <div className="space-y-2">
+            <div className="flex gap-2">
+              <input
+                className="input font-mono text-xs"
+                placeholder="https://…/photograph.jpg"
+                value={url}
+                onChange={(e) => setUrl(e.target.value)}
+                onKeyDown={(e) => e.key === "Enter" && url && fromUrl()}
+              />
+              <button className="btn-primary shrink-0" onClick={fromUrl} disabled={busy || !url}>
+                Use it
+              </button>
+            </div>
+            <p className="text-xs text-slate-500">
+              For images you have already licensed or downloaded. The app records it as supplied by
+              you — checking you have the right to publish it is on you.
+            </p>
+          </div>
+        )}
 
         {note && <div className="text-sm text-amber">{note}</div>}
         {busy && <Spinner label="Working…" />}

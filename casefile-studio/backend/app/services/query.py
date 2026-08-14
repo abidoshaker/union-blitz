@@ -154,6 +154,15 @@ STOPWORDS = {
 }
 
 
+# How well a sourced picture actually matches the scene. This is the thing a
+# creator needs to see: "atmosphere" and "filler" are honest B-roll, but they
+# are not the event, and knowing which scenes are which is the difference
+# between spot-checking twelve of them and re-watching the whole hour.
+MATCH_SUBJECT = "subject"       # searched a name, place or date from the script
+MATCH_ATMOSPHERE = "atmosphere"  # searched a topic the script mentions
+MATCH_FILLER = "filler"          # generic fallback: nothing specific matched
+
+
 @dataclass
 class SceneQueries:
     """Search terms for one scene, most specific first."""
@@ -161,6 +170,31 @@ class SceneQueries:
     stock: list[str] = field(default_factory=list)      # atmosphere, for stock libraries
     entities: list[str] = field(default_factory=list)
     years: list[str] = field(default_factory=list)
+
+    def classify(self, term: str) -> str:
+        """Which rung of the ladder a query came from."""
+        if term in self.archival:
+            return MATCH_SUBJECT
+        if term in GENERIC_FALLBACKS:
+            return MATCH_FILLER
+        if term in self.stock:
+            return MATCH_ATMOSPHERE
+        return MATCH_FILLER
+
+    @property
+    def has_strong_subject(self) -> bool:
+        """Worth asking an archive about.
+
+        A name on its own is weak - archives are full of people called Smith.
+        A name with a year, or a place with a year, is a real lead. So is a
+        multi-word proper noun, which is usually an organisation or a location
+        rather than an incidental capitalised word.
+        """
+        if not self.entities:
+            return False
+        if self.years:
+            return True
+        return any(" " in entity for entity in self.entities)
 
     def ladder(self, prefer_archival: bool) -> list[str]:
         """Queries to try in order, always ending somewhere that has results."""

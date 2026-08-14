@@ -196,6 +196,60 @@ def test_changing_the_picture_drops_the_stale_preview(client, project):
         assert not preview.exists()
 
 
+def test_a_picture_you_supplied_is_not_filed_as_stock(client, project):
+    """Provenance has to be true, or the badges are decoration.
+
+    An upload is your own material. Calling it 'stock' in the same column that
+    distinguishes archive from mood would quietly undo the whole point.
+    """
+    fixture = Path(__file__).parent / "data" / "face.jpg"
+    if not fixture.exists():
+        pytest.skip("no image fixture available")
+
+    scene = _scenes(client, project)[2]
+    with open(fixture, "rb") as fh:
+        res = client.post(f"/api/scenes/{scene['id']}/upload-image",
+                          files={"file": ("mine.jpg", fh, "image/jpeg")})
+    assert res.status_code == 200, res.text
+
+    after = _scenes(client, project)[2]
+    assert after["visual_source"] == "upload"
+    # You chose it, so it is the subject - not something a search settled for.
+    assert after["match_level"] == "subject"
+    assert after["source_query"] == "chosen by hand"
+
+
+def test_ai_generation_stays_blocked_on_a_real_person(client, project):
+    """The guard lives in the service, so the route cannot be talked round it."""
+    scene = _scenes(client, project)[0]
+    client.patch(f"/api/scenes/{scene['id']}", json={"depicts_real_person": True})
+    res = client.post(f"/api/scenes/{scene['id']}/generate-image",
+                      json={"provider": "placeholder", "prompt": "a courtyard"})
+    assert res.status_code == 409
+    assert "real person" in res.json()["detail"].lower()
+    client.patch(f"/api/scenes/{scene['id']}", json={"depicts_real_person": False})
+
+
+def test_a_generated_picture_is_recorded_as_a_dramatisation(client, project):
+    scene = _scenes(client, project)[1]
+    res = client.post(f"/api/scenes/{scene['id']}/generate-image",
+                      json={"provider": "placeholder", "prompt": "a rain-slick yard at night"})
+    assert res.status_code == 200, res.text
+
+    after = _scenes(client, project)[1]
+    assert after["visual_source"] == "ai"
+    # A picture that was invented is never a record of the event.
+    assert after["match_level"] == "atmosphere"
+    assert "rain-slick" in after["source_query"]
+
+
+def test_a_url_you_do_not_own_the_rights_to_is_your_problem(client, project):
+    """The licence string has to say who is carrying the risk."""
+    res = client.post(f"/api/scenes/{_scenes(client, project)[0]['id']}/image-from-url",
+                      json={"url": "ftp://example.com/evidence.jpg"})
+    assert res.status_code == 400
+
+
 def test_search_reports_which_query_it_used(client, project):
     scene = _scenes(client, project)[0]
     res = client.post(f"/api/scenes/{scene['id']}/search-images",

@@ -56,6 +56,8 @@ export interface Scene {
   media_in: number;
   audio_mode: string;
   blur_faces: boolean;
+  match_level: string;
+  source_query: string;
   kenburns: string;
   status: string;
   duration: number;

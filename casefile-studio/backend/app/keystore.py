@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 
+from sqlalchemy.exc import SQLAlchemyError
 from sqlmodel import select
 
 from .db import session_scope
@@ -19,17 +20,24 @@ ENV_KEYS = {
     "pixabay": "PIXABAY_API_KEY",
     "unsplash": "UNSPLASH_ACCESS_KEY",
     "fal": "FAL_KEY",
+    "nara": "NARA_API_KEY",
     "elevenlabs": "ELEVENLABS_API_KEY",
 }
 
 
 def get_key(provider: str) -> str | None:
-    with session_scope() as s:
-        row = s.get(Secret, provider)
-        if row and row.value_encrypted:
-            value = decrypt(row.value_encrypted)
-            if value:
-                return value
+    # Providers call this from available(), which the UI hits on every settings
+    # load - including before the database has been created. A missing table
+    # must read as "no key", not as an exception out of a status check.
+    try:
+        with session_scope() as s:
+            row = s.get(Secret, provider)
+            if row and row.value_encrypted:
+                value = decrypt(row.value_encrypted)
+                if value:
+                    return value
+    except SQLAlchemyError:
+        pass
     env_name = ENV_KEYS.get(provider)
     if env_name:
         return os.environ.get(env_name) or None
@@ -53,8 +61,12 @@ def delete_key(provider: str) -> None:
 
 
 def configured_providers() -> set[str]:
-    with session_scope() as s:
-        rows = s.exec(select(Secret)).all()
-        stored = {r.provider for r in rows if r.value_encrypted}
+    stored: set[str] = set()
+    try:
+        with session_scope() as s:
+            rows = s.exec(select(Secret)).all()
+            stored = {r.provider for r in rows if r.value_encrypted}
+    except SQLAlchemyError:
+        pass
     stored |= {p for p, env in ENV_KEYS.items() if os.environ.get(env)}
     return stored
