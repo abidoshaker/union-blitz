@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { JobBar, JobHistory } from "../components/JobBar";
+import { NarrationPanel } from "../components/NarrationPanel";
+import { OutputPanel } from "../components/OutputPanel";
 import { Storyboard } from "../components/Storyboard";
 import { Banner, Confirm, Empty, Modal, Pill, Stat } from "../components/ui";
 import {
@@ -91,7 +93,9 @@ export function Workspace({ projectId, onBack }: { projectId: number; onBack: ()
           onChanged={load}
         />
       )}
-      {tab === "render" && <RenderTab project={project} chapters={chapters} onRan={refresh} />}
+      {tab === "render" && (
+        <RenderTab project={project} chapters={chapters} onRan={refresh} onChanged={load} />
+      )}
 
       <JobHistory jobs={jobs} />
     </div>
@@ -243,6 +247,7 @@ function StoryboardTab({
         />
       </div>
 
+      <NarrationPanel project={project} onSaved={onChanged} />
       <SourcingPanel project={project} onSaved={onChanged} />
 
       <div className="card flex flex-wrap items-center gap-2 p-3">
@@ -268,7 +273,7 @@ function StoryboardTab({
       {preview && (
         <div className="card p-4">
           <div className="flex items-center gap-3">
-            <h3 className="text-base">Confirm batch</h3>
+            <h3 className="text-[15px]">Confirm batch</h3>
             <Pill tone="amber">{preview.op}</Pill>
             <div className="ml-auto flex gap-2">
               <button className="btn-ghost" onClick={() => setPreview(null)}>
@@ -319,7 +324,7 @@ function SourcingPanel({ project, onSaved }: { project: Project; onSaved: () => 
   return (
     <div className="card p-4">
       <div className="mb-3 flex items-center gap-2">
-        <h3 className="text-base">Sourcing</h3>
+        <h3 className="text-[15px]">Sourcing</h3>
         <span className="text-xs text-slate-500">
           what the app goes and finds for each scene
         </span>
@@ -409,10 +414,12 @@ function RenderTab({
   project,
   chapters,
   onRan,
+  onChanged,
 }: {
   project: Project;
   chapters: Chapter[];
   onRan: () => void;
+  onChanged: () => void;
 }) {
   const [check, setCheck] = useState<Preflight | null>(null);
   const [renders, setRenders] = useState<any[]>([]);
@@ -457,6 +464,17 @@ function RenderTab({
           )}
         </>
       )}
+
+      {/* Changing the frame or the encoder changes the preflight numbers above,
+          so both this tab and the project itself are re-read on save. */}
+      <OutputPanel
+        project={project}
+        chapters={chapters}
+        onSaved={() => {
+          load();
+          onChanged();
+        }}
+      />
 
       <Banner tone="amber" title="Render one chapter first">
         On an hour-long video a full render takes hours. A chapter preview takes minutes and shows
@@ -527,7 +545,7 @@ function RenderTab({
       {usage && (
         <div className="card p-4">
           <div className="mb-3 flex flex-wrap items-center gap-2">
-            <h3 className="text-base">Disk</h3>
+            <h3 className="text-[15px]">Disk</h3>
             <span className="font-mono text-sm text-slate-300">
               {formatBytes(Number(usage.total_bytes))}
             </span>

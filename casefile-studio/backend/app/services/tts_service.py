@@ -23,6 +23,7 @@ from .. import ffmpeg
 from ..config import settings
 from ..hashing import audio_hash
 from ..providers.tts import TTSOpts, TTSProvider, TTSUnavailable, get_provider
+from . import speech
 
 log = logging.getLogger("casefile.tts")
 
@@ -78,7 +79,22 @@ def _audio_dir(project_id: int) -> Path:
     return path
 
 
-def normalize_to_wav(raw: bytes, dest: Path, *, sample_rate: int = SAMPLE_RATE) -> float:
+# Cut anything quieter than this at the head and tail of a take. Providers
+# pad by 100-300 ms and are not consistent about it, which is enough to make
+# an otherwise deliberate pause feel arbitrary.
+TRIM_THRESHOLD_DB = -50
+TRIM_FILTER = (
+    f"silenceremove=start_periods=1:start_silence=0.02:"
+    f"start_threshold={TRIM_THRESHOLD_DB}dB:detection=peak,"
+    f"areverse,"
+    f"silenceremove=start_periods=1:start_silence=0.04:"
+    f"start_threshold={TRIM_THRESHOLD_DB}dB:detection=peak,"
+    f"areverse"
+)
+
+
+def normalize_to_wav(raw: bytes, dest: Path, *, sample_rate: int = SAMPLE_RATE,
+                     trim: bool = False) -> float:
     """Every provider's output becomes the same mono 48k PCM WAV.
 
     Uniformity here is what makes concatenating 240 clips sample-accurate
@@ -93,18 +109,35 @@ def normalize_to_wav(raw: bytes, dest: Path, *, sample_rate: int = SAMPLE_RATE) 
     dest.parent.mkdir(parents=True, exist_ok=True)
     tmp_in.write_bytes(raw)
     try:
-        ffmpeg.run([
-            "-i", str(tmp_in),
-            "-ac", "1", "-ar", str(sample_rate),
-            "-c:a", "pcm_s16le",
-            str(tmp_out),
-        ])
+        args = ["-i", str(tmp_in), "-ac", "1", "-ar", str(sample_rate)]
+        if trim:
+            args += ["-af", TRIM_FILTER]
+        args += ["-c:a", "pcm_s16le", str(tmp_out)]
+        ffmpeg.run(args)
+
+        if trim and not _trim_looks_sane(tmp_in, tmp_out):
+            # A silent take (the draft voice) or an over-eager threshold would
+            # leave nothing behind. Better a little padding than a lost line.
+            ffmpeg.run(["-i", str(tmp_in), "-ac", "1", "-ar", str(sample_rate),
+                        "-c:a", "pcm_s16le", "-y", str(tmp_out)])
+
         tmp_out.replace(dest)   # atomic; a concurrent twin writing the same
                                 # bytes to the same path is harmless
     finally:
         tmp_in.unlink(missing_ok=True)
         tmp_out.unlink(missing_ok=True)
     return ffmpeg.duration_of(dest)
+
+
+def _trim_looks_sane(source: Path, trimmed: Path) -> bool:
+    """Did trimming take padding, or did it eat the line?"""
+    try:
+        before, after = ffmpeg.duration_of(source), ffmpeg.duration_of(trimmed)
+    except Exception:
+        return False
+    if after < 0.12:
+        return False
+    return before <= 0 or after >= before * 0.5
 
 
 def _with_retry(fn: Callable, *, attempts: int = 5, on_wait: Callable[[str], None] | None = None):
@@ -139,6 +172,11 @@ def synthesize_one(
     meter: CostMeter | None = None,
     on_message: Callable[[str], None] | None = None,
 ) -> SceneAudio:
+    # The voice is given the spoken form; the script keeps its own words. The
+    # cache key is built from the script text, so editing a line still misses
+    # the cache and re-records, which is the behaviour you want.
+    said = speech.to_spoken(text) if opts.spoken_form else text
+
     key = audio_hash(text=text, provider=provider.name, voice_id=voice_id, opts=opts.cache_key())
     dest = _audio_dir(project_id) / f"{key}.wav"
 
@@ -157,10 +195,10 @@ def synthesize_one(
             meter.reserve(cost)
 
         result = _with_retry(
-            lambda: provider.synthesize(text, voice_id, opts),
+            lambda: provider.synthesize(said, voice_id, opts),
             on_wait=on_message or (lambda _m: None),
         )
-        duration = normalize_to_wav(result.audio, dest)
+        duration = normalize_to_wav(result.audio, dest, trim=opts.trim_padding)
     return SceneAudio(scene_id, dest, duration, cached=False, cost=cost)
 
 

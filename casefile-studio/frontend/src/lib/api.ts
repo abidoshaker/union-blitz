@@ -72,6 +72,34 @@ export interface Scene {
   attribution: string;
 }
 
+export interface VoiceOption {
+  id: string;
+  title: string;
+  provider: string;
+  tags: string[];
+  is_clone: boolean;
+  commercial_ok: boolean;
+  note: string;
+}
+
+export interface TtsProviderInfo {
+  name: string;
+  label: string;
+  supports_cloning: boolean;
+  is_local: boolean;
+  commercial_ok: boolean;
+  is_draft_only: boolean;
+  cost_per_million_bytes: number;
+  available: boolean;
+  unavailable_reason: string;
+}
+
+export interface VoiceCatalogue {
+  voices: VoiceOption[];
+  providers: TtsProviderInfo[];
+  unavailable: { provider: string; reason: string }[];
+}
+
 export interface Job {
   id: number;
   type: string;

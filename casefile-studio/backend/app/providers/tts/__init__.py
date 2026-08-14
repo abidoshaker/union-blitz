@@ -43,3 +43,33 @@ def all_providers() -> list[TTSProvider]:
 
 def describe_all() -> list[dict]:
     return [p.describe() for p in all_providers()]
+
+
+# Best first. Fish is the paid narrator, Kokoro the free offline one that can
+# still be published, Edge the free draft you must not monetise. Draft is
+# silence and exists for tests, so it is never recommended to anyone.
+PREFERENCE = ("fish", "kokoro", "edge")
+
+#: What each provider should narrate with when nothing has been chosen yet.
+DEFAULT_VOICE = {
+    "fish": "",                       # Fish falls back to its own default model
+    "kokoro": "am_michael",
+    "edge": "en-US-GuyNeural",
+    "draft": "silence",
+}
+
+
+def recommended() -> tuple[str, str]:
+    """The best provider available right now, and a voice to start on.
+
+    A project created with no narration settings would otherwise inherit the
+    silent draft voice and render an hour of nothing.
+    """
+    for name in PREFERENCE:
+        try:
+            provider = get_provider(name)
+        except TTSUnavailable:
+            continue
+        if provider.available()[0]:
+            return name, DEFAULT_VOICE.get(name, "")
+    return "draft", DEFAULT_VOICE["draft"]

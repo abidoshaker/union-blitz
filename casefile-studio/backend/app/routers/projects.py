@@ -11,6 +11,7 @@ from sqlmodel import Session, select
 from ..config import settings
 from ..db import get_session
 from ..models import Chapter, Project, RenderOutput, Scene, Script
+from ..providers import tts as tts_providers
 from ..services import housekeeping, segmentation
 from ..services.pipeline import project_settings
 
@@ -72,8 +73,18 @@ def list_projects(session: Session = Depends(get_session)) -> list[dict]:
 
 @router.post("", status_code=201)
 def create_project(body: ProjectCreate, session: Session = Depends(get_session)) -> dict:
+    # A new project that says nothing about narration would otherwise inherit
+    # the silent draft voice from DEFAULTS and render an hour of nothing. Pick
+    # the best voice actually available instead; an explicit choice always
+    # wins, which is what keeps the test fixtures on 'draft'.
+    chosen = dict(body.settings)
+    if "tts_provider" not in chosen:
+        provider, voice = tts_providers.recommended()
+        chosen["tts_provider"] = provider
+        chosen.setdefault("voice_id", voice)
+
     project = Project(title=body.title.strip() or "Untitled case",
-                      genre_preset=body.genre_preset, settings_json=body.settings)
+                      genre_preset=body.genre_preset, settings_json=chosen)
     session.add(project)
     session.commit()
     session.refresh(project)

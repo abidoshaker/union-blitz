@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +16,7 @@ from ..db import get_session
 from ..models import Asset, RenderOutput, Scene, Voice
 from ..providers import image as image_providers
 from ..providers import tts as tts_providers
-from ..services import image_service
+from ..services import image_service, speech
 from ..services.tts_service import normalize_to_wav
 
 router = APIRouter(prefix="/api", tags=["media"])
@@ -27,11 +28,21 @@ router = APIRouter(prefix="/api", tags=["media"])
 
 @router.get("/voices")
 def list_voices(provider: str | None = None) -> dict[str, Any]:
+    """Every voice on offer, plus what each provider is and is not good for.
+
+    `providers` carries the facts a choice actually turns on - whether it can
+    be used on a monetised channel, what it costs, whether it runs offline -
+    so the interface never has to hard-code a list that drifts from the
+    adapters.
+    """
     out: list[dict] = []
     errors: list[dict] = []
+    described: list[dict] = []
     names = [provider] if provider else [p.name for p in tts_providers.all_providers()]
     for name in names:
         adapter = tts_providers.get_provider(name)
+        info = adapter.describe()
+        described.append(info)
         usable, reason = adapter.available()
         if not usable:
             errors.append({"provider": name, "reason": reason})
@@ -45,7 +56,7 @@ def list_voices(provider: str | None = None) -> dict[str, Any]:
                 })
         except Exception as exc:
             errors.append({"provider": name, "reason": str(exc)})
-    return {"voices": out, "unavailable": errors}
+    return {"voices": out, "unavailable": errors, "providers": described}
 
 
 @router.post("/voices/clone")
@@ -90,23 +101,43 @@ class PreviewIn(BaseModel):
     provider: str = "draft"
     voice_id: str = ""
     text: str = "In the winter of 1974, the ledger was still open on the desk."
+    speed: float = 1.0
+    spoken_numbers: bool = True
 
 
 @router.post("/voices/preview")
 def preview_voice(body: PreviewIn) -> FileResponse:
+    """Hear a voice on a line before committing an hour of narration to it.
+
+    The preview goes through the same spoken-form rewrite and the same trim as
+    the real thing, so what you audition is what you get - auditioning a
+    prettier version of the pipeline would be worse than not auditioning.
+    """
     adapter = tts_providers.get_provider(body.provider)
     usable, reason = adapter.available()
     if not usable:
         raise HTTPException(400, reason)
+
+    opts = tts_providers.TTSOpts(
+        speed=max(0.5, min(2.0, body.speed)),
+        spoken_form=body.spoken_numbers,
+    )
+    line = body.text[:400]
+    said = speech.to_spoken(line) if opts.spoken_form else line
     try:
-        result = adapter.synthesize(body.text[:400], body.voice_id, tts_providers.TTSOpts())
+        result = adapter.synthesize(said, body.voice_id, opts)
     except Exception as exc:
         raise HTTPException(502, f"Preview failed: {exc}") from exc
 
     preview_dir = settings.data_dir / "previews"
     preview_dir.mkdir(parents=True, exist_ok=True)
-    dest = preview_dir / f"{body.provider}_{body.voice_id or 'default'}.wav"
-    normalize_to_wav(result.audio, dest)
+    # The voice id can be a path-unsafe model id, and two voices must never
+    # collide on one file or you audition the wrong one.
+    token = hashlib.sha1(
+        f"{body.provider}|{body.voice_id}|{said}|{opts.speed}".encode()
+    ).hexdigest()[:16]
+    dest = preview_dir / f"voice_{token}.wav"
+    normalize_to_wav(result.audio, dest, trim=True)
     return FileResponse(dest, media_type="audio/wav")
 
 

@@ -1,5 +1,5 @@
 import { useEffect, useRef, useState } from "react";
-import { api, formatDuration, type Scene } from "../lib/api";
+import { api, formatDuration, type Scene, type VoiceCatalogue } from "../lib/api";
 import { Banner, Modal, Pill, Spinner } from "./ui";
 
 /**
@@ -68,6 +68,139 @@ export function ScenePreview({ scene, onClose }: { scene: Scene; onClose: () => 
           </p>
         </div>
       )}
+    </Modal>
+  );
+}
+
+/**
+ * Re-record one line in a voice of its own.
+ *
+ * A courtroom quote, a wiretap transcript or a letter read aloud wants to be
+ * someone other than the narrator. The engine has always allowed it - the
+ * regenerate call takes a voice - so this is the control that reaches it.
+ */
+export function SceneVoice({
+  scene,
+  onClose,
+  onApplied,
+}: {
+  scene: Scene;
+  onClose: () => void;
+  onApplied: () => void;
+}) {
+  const [catalogue, setCatalogue] = useState<VoiceCatalogue | null>(null);
+  const [provider, setProvider] = useState("");
+  const [voiceId, setVoiceId] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [note, setNote] = useState("");
+  const audioRef = useRef<HTMLAudioElement>(null);
+
+  useEffect(() => {
+    api
+      .get<VoiceCatalogue>("/api/voices")
+      .then((c) => {
+        setCatalogue(c);
+        const first = c.providers.find((p) => p.available && p.name !== "draft");
+        if (first) setProvider(first.name);
+      })
+      .catch((err) => setNote((err as Error).message));
+  }, []);
+
+  const voices = (catalogue?.voices ?? []).filter((v) => v.provider === provider);
+
+  const audition = async (id: string) => {
+    setNote("");
+    try {
+      const res = await fetch("/api/voices/preview", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ provider, voice_id: id, text: scene.text.slice(0, 240) }),
+      });
+      if (!res.ok) throw new Error((await res.json()).detail ?? res.statusText);
+      if (audioRef.current) {
+        audioRef.current.src = URL.createObjectURL(await res.blob());
+        await audioRef.current.play();
+      }
+    } catch (err) {
+      setNote((err as Error).message);
+    }
+  };
+
+  const record = async () => {
+    setBusy(true);
+    setNote("");
+    try {
+      await api.post(`/api/scenes/${scene.id}/regenerate-audio`, {
+        tts_provider: provider,
+        voice_id: voiceId,
+      });
+      onApplied();
+      onClose();
+    } catch (err) {
+      setNote((err as Error).message);
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Modal title={`Voice for scene ${scene.order_index + 1}`} onClose={onClose} wide>
+      <div className="space-y-3">
+        <p className="text-sm text-slate-400">{scene.text}</p>
+
+        <div className="flex flex-wrap gap-2">
+          {(catalogue?.providers ?? [])
+            .filter((p) => p.name !== "draft")
+            .map((p) => (
+              <button
+                key={p.name}
+                className={p.name === provider ? "btn-amber" : "btn-ghost"}
+                onClick={() => {
+                  setProvider(p.name);
+                  setVoiceId("");
+                }}
+                disabled={!p.available}
+                title={p.available ? p.label : p.unavailable_reason}
+              >
+                {p.label}
+              </button>
+            ))}
+        </div>
+
+        {!catalogue && <Spinner label="Looking for voices…" />}
+
+        <div className="max-h-64 space-y-1 overflow-y-auto pr-1">
+          {voices.map((v) => (
+            <div
+              key={v.id}
+              className={`flex items-center gap-2 rounded-xl border p-2 ${
+                v.id === voiceId ? "border-amber/60 bg-amber/5" : "border-white/5"
+              }`}
+            >
+              <button className="min-w-0 flex-1 text-left" onClick={() => setVoiceId(v.id)}>
+                <div className="truncate text-sm text-slate-200">{v.title}</div>
+                <div className="truncate text-[11px] text-slate-500">{v.tags.join(", ")}</div>
+              </button>
+              {!v.commercial_ok && <Pill tone="danger">draft</Pill>}
+              <button className="btn-ghost !px-2.5 !py-1 text-xs" onClick={() => audition(v.id)}>
+                ▶ Hear it
+              </button>
+            </div>
+          ))}
+        </div>
+
+        {note && <div className="text-sm text-amber">{note}</div>}
+        {busy && <Spinner label="Recording this line…" />}
+
+        <div className="flex items-center gap-2">
+          <button className="btn-primary" onClick={record} disabled={busy || !provider}>
+            Re-record in this voice
+          </button>
+          <span className="text-xs text-slate-500">
+            Only this scene changes. The pace and pauses stay the project's.
+          </span>
+        </div>
+        <audio ref={audioRef} className="hidden" />
+      </div>
     </Modal>
   );
 }

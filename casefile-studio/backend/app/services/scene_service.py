@@ -151,10 +151,14 @@ def regenerate_audio(session: Session, scene: Scene, *, voice_id: str | None = N
             duration = video_service.extract_audio(Path(visual.local_path), dest)
             return _attach_audio(session, scene, dest, duration, "clip")
 
+    from .pipeline import narration_opts
+
     result = tts_service.synthesize_one(
         project_id=project_id, scene_id=int(scene.id), text=scene.text,
         provider=provider, voice_id=voice_id,
-        opts=TTSOpts(sample_rate=tts_service.SAMPLE_RATE),
+        # Re-recording one line has to match the delivery of the other 200,
+        # or the retake stands out more than whatever was wrong with it.
+        opts=narration_opts(cfg),
     )
     return _attach_audio(session, scene, result.path, result.duration, provider_name,
                          cost=result.cost)

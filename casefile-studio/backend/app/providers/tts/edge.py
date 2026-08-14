@@ -53,9 +53,13 @@ class EdgeProvider(TTSProvider):
             raise TTSUnavailable(reason)
         import edge_tts
 
+        # Edge wants a percentage off neutral, signed, as a string.
+        delta = int(round((opts.speed - 1.0) * 100))
+        rate = f"{delta:+d}%"
+
         async def _run() -> bytes:
             chunks = bytearray()
-            comm = edge_tts.Communicate(text, voice_id or "en-US-GuyNeural")
+            comm = edge_tts.Communicate(text, voice_id or "en-US-GuyNeural", rate=rate)
             async for chunk in comm.stream():
                 if chunk["type"] == "audio":
                     chunks.extend(chunk["data"])

@@ -22,7 +22,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, formatDuration, type Chapter, type Scene } from "../lib/api";
-import { ImagePicker, ScenePreview } from "./SceneTools";
+import { ImagePicker, ScenePreview, SceneVoice } from "./SceneTools";
 import { Empty, Pill } from "./ui";
 
 const FILTERS = [
@@ -402,8 +402,9 @@ function SceneCard({
   const [text, setText] = useState(scene.text);
   const [dirty, setDirty] = useState(false);
   const [target, setTarget] = useState(String(position));
-  const [tool, setTool] = useState<"" | "preview" | "image">("");
+  const [tool, setTool] = useState<"" | "preview" | "image" | "voice">("");
   const [busy, setBusy] = useState("");
+  const [problem, setProblem] = useState("");
 
   useEffect(() => {
     setText(scene.text);
@@ -422,11 +423,13 @@ function SceneCard({
 
   const retake = async () => {
     setBusy("audio");
+    setProblem("");
     try {
       await api.post(`/api/scenes/${scene.id}/regenerate-audio`, {});
       onChanged();
     } catch (err) {
-      alert(`Could not re-record that line: ${(err as Error).message}`);
+      // A modal dialog over a 200-card board loses your place. Say it here.
+      setProblem((err as Error).message);
     } finally {
       setBusy("");
     }
@@ -584,6 +587,13 @@ function SceneCard({
           </button>
           <button
             className="btn-ghost !px-2.5 !py-1 text-xs"
+            onClick={() => setTool("voice")}
+            title="Read this line in a different voice"
+          >
+            ♪ Change voice
+          </button>
+          <button
+            className="btn-ghost !px-2.5 !py-1 text-xs"
             onClick={() => setTool("image")}
             title="Pick a different picture, or upload your own"
           >
@@ -595,7 +605,14 @@ function SceneCard({
         </div>
       </div>
 
+      {problem && (
+        <div className="mt-1.5 text-xs text-danger">{problem}</div>
+      )}
+
       {tool === "preview" && <ScenePreview scene={scene} onClose={() => setTool("")} />}
+      {tool === "voice" && (
+        <SceneVoice scene={scene} onClose={() => setTool("")} onApplied={onChanged} />
+      )}
       {tool === "image" && (
         <ImagePicker scene={scene} onClose={() => setTool("")} onApplied={onChanged} />
       )}

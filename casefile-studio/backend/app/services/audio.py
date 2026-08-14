@@ -12,7 +12,7 @@ import re
 import wave
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Iterable
+from typing import Iterable, Sequence
 
 from .. import ffmpeg
 from ..config import settings
@@ -30,11 +30,16 @@ class Timeline:
     total: float
 
 
-def concat_wavs(paths: Iterable[Path], dest: Path, *, gap_sec: float = 0.25) -> Timeline:
+def concat_wavs(paths: Iterable[Path], dest: Path, *, gap_sec: float = 0.25,
+                gaps: Sequence[float] | None = None) -> Timeline:
     """Stream-concatenate scene WAVs, inserting a breath between scenes.
 
     Written frame by frame rather than loaded into numpy: an hour of 48k mono
     PCM is ~350 MB, and there is no reason to hold it in memory.
+
+    `gaps` gives a separate rest after each scene - see services/speech.py for
+    why a uniform one sounds like a machine reading a list. `gap_sec` is the
+    fallback when no plan is supplied.
     """
     paths = list(paths)
     starts: list[float] = []
@@ -46,8 +51,10 @@ def concat_wavs(paths: Iterable[Path], dest: Path, *, gap_sec: float = 0.25) -> 
         out.setsampwidth(2)
         out.setframerate(SAMPLE_RATE)
         cursor = 0  # frames
-        gap_frames = int(gap_sec * SAMPLE_RATE)
-        silence = b"\x00\x00" * gap_frames
+
+        def rest(index: int) -> int:
+            seconds = gaps[index] if gaps is not None and index < len(gaps) else gap_sec
+            return int(max(0.0, seconds) * SAMPLE_RATE)
 
         for i, path in enumerate(paths):
             with wave.open(str(path), "rb") as src:
@@ -67,9 +74,11 @@ def concat_wavs(paths: Iterable[Path], dest: Path, *, gap_sec: float = 0.25) -> 
                 cursor += src.getnframes()
                 ends.append(cursor / SAMPLE_RATE)
 
-            if gap_frames and i < len(paths) - 1:
-                out.writeframes(silence)
-                cursor += gap_frames
+            if i < len(paths) - 1:
+                frames = rest(i)
+                if frames:
+                    out.writeframes(b"\x00\x00" * frames)
+                    cursor += frames
 
     return Timeline(starts=starts, ends=ends, total=cursor / SAMPLE_RATE)
 

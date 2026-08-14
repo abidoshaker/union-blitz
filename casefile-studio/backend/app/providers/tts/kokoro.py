@@ -68,14 +68,23 @@ class KokoroProvider(TTSProvider):
 
     # -- voices -----------------------------------------------------------
     def list_voices(self) -> list[VoiceInfo]:
+        """The curated eight straight away; the other forty-odd if they are free.
+
+        Loading the ONNX model to enumerate voice names takes several seconds,
+        and the voice picker opens on every visit to the storyboard. Waiting
+        for the model just to draw a list is the wrong trade: show the featured
+        voices at once, and fill in the rest only once something else has
+        already paid to load the engine.
+        """
         featured = [
             VoiceInfo(id=vid, title=title, provider=self.name, tags=tags,
                       commercial_ok=True, note="Apache-2.0, runs offline")
             for vid, title, tags in FEATURED
         ]
+        if self._engine is None:
+            return featured
         try:
-            engine = self._load()
-            names = sorted(getattr(engine, "get_voices", lambda: [])())
+            names = sorted(getattr(self._engine, "get_voices", lambda: [])())
         except Exception:
             return featured
         known = {v.id for v in featured}

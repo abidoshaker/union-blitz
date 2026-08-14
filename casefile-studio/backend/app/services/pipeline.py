@@ -21,7 +21,7 @@ from ..providers.tts import TTSOpts
 from ..queue.base import JobContext
 from . import audio as audio_service
 from . import (
-    align_service, image_service, query, render_service, segmentation,
+    align_service, image_service, query, render_service, segmentation, speech,
     subtitle_service, tts_service, video_service, vision,
 )
 
@@ -30,6 +30,12 @@ log = logging.getLogger("casefile.pipeline")
 DEFAULTS: dict[str, Any] = {
     "tts_provider": "draft",
     "voice_id": "silence",
+    # Delivery. See services/speech.py - these are what stop 200 separately
+    # synthesised scenes sounding like a machine reading a list.
+    "speech_rate": 1.0,               # 0.85 unhurried .. 1.15 urgent
+    "pause_scale": 1.0,               # 0 = butt-joined, 1.5 = give it room
+    "spoken_numbers": True,           # 1991 -> "nineteen ninety-one"
+    "trim_takes": True,               # cut the padding providers leave on
     "llm_provider": None,
     "visual_source": "placeholder",
     "image_pool_per_chapter": 8,
@@ -65,6 +71,16 @@ def project_settings(project: Project) -> dict[str, Any]:
     merged = dict(DEFAULTS)
     merged.update(project.settings_json or {})
     return merged
+
+
+def narration_opts(cfg: dict[str, Any]) -> TTSOpts:
+    """How the voice should read, from the project's delivery settings."""
+    return TTSOpts(
+        sample_rate=tts_service.SAMPLE_RATE,
+        speed=max(0.5, min(2.0, float(cfg.get("speech_rate", 1.0) or 1.0))),
+        spoken_form=bool(cfg.get("spoken_numbers", True)),
+        trim_padding=bool(cfg.get("trim_takes", True)),
+    )
 
 
 def _render_opts(cfg: dict[str, Any]) -> render_service.RenderOpts:
@@ -195,7 +211,7 @@ def handle_narrate(ctx: JobContext) -> dict[str, Any]:
         items=items,
         provider_name=str(cfg["tts_provider"]),
         voice_id=str(cfg["voice_id"]),
-        opts=TTSOpts(sample_rate=tts_service.SAMPLE_RATE),
+        opts=narration_opts(cfg),
         spend_ceiling=cfg.get("spend_ceiling"),
         on_progress=lambda f, m: ctx.progress(0.02 + f * 0.95, m),
         should_stop=ctx.check_stop,
@@ -606,7 +622,11 @@ def handle_render(ctx: JobContext) -> dict[str, Any]:
     # --- 1. narration timeline ------------------------------------------
     ctx.progress(0.02, "assembling narration", force=True)
     narration = base / "audio" / (f"narration_{chapter_id or 'full'}.wav")
-    timeline = audio_service.concat_wavs([Path(r["audio"]) for r in rows], narration)
+    # A reader rests by punctuation, and longest where the subject changes.
+    pauses = speech.plan_pauses(rows, scale=float(cfg.get("pause_scale", 1.0) or 0.0))
+    timeline = audio_service.concat_wavs(
+        [Path(r["audio"]) for r in rows], narration, gaps=pauses,
+    )
 
     check = render_service.preflight(len(rows), timeline.total, opts, workdir)
     if not check["ok"]:

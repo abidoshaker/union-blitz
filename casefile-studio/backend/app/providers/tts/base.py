@@ -23,10 +23,18 @@ class TTSOpts:
     fmt: str = "wav"
     speed: float = 1.0
     sample_rate: int = 48000
+    #: Rewrite years, sums, initialisms and dates into the words a reader says
+    #: aloud before handing the line to the voice. See services/speech.py.
+    spoken_form: bool = True
+    #: Cut the padding providers leave at each end, so the pause between
+    #: scenes is the one the rhythm planner asked for and not that plus
+    #: whatever the model felt like adding.
+    trim_padding: bool = True
     extra: dict[str, Any] = field(default_factory=dict)
 
     def cache_key(self) -> dict[str, Any]:
-        return {"fmt": self.fmt, "speed": self.speed, "sr": self.sample_rate, **self.extra}
+        return {"fmt": self.fmt, "speed": self.speed, "sr": self.sample_rate,
+                "spoken": self.spoken_form, "trim": self.trim_padding, **self.extra}
 
 
 @dataclass

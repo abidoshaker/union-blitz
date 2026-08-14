@@ -123,6 +123,57 @@ killed outright at 46%, the app restarted, and it reused all 23 finished clips
 and completed the rest. If you stop a render, close the app, or your PC
 restarts, it picks up from the last finished scene.
 
+## Choosing the narrator
+
+Open a project, go to **Storyboard**, and the **Narration** panel is at the
+top. Pick a provider, then a voice, then press **▶ Hear it** — the audition
+uses a line from your own script, through the same rewrite and trim the real
+narration gets, so what you hear is what you get.
+
+| Provider | Voices | Publish on a monetised channel? |
+|---|---|---|
+| **Fish Audio** | your cloned voices first, then their public models | Yes — the cloud API is licensed for it |
+| **Kokoro-82M** | 8 curated, ~54 in total, all offline | Yes — Apache-2.0 |
+| **Edge TTS** | 6 curated | **No** — Microsoft's terms forbid it. Drafting only |
+
+Each voice carries its licence as a badge, because on a monetised channel that
+is the fact the choice actually turns on. Fish can **clone your own voice** —
+ten to fifteen seconds of clean speech, no music, no room echo.
+
+One scene can have a voice of its own: **♪ Change voice** on any scene card.
+Useful for a courtroom quote or a wiretap transcript. Only that scene changes.
+
+## Making it sound less mechanical
+
+Each scene is recorded as a separate take, which is what lets an hour resume
+after a crash — but it is also what makes chunked narration sound like a list
+being read. Three things in the Narration panel fix that:
+
+* **Numbers and initials — say them aloud.** A true-crime script is full of
+  the things engines read badly. On, "In 1991 the DEA seized 4,500 kg worth
+  $2.5m at 3:15 a.m." is spoken as *"in nineteen ninety-one the D-E-A seized
+  four thousand five hundred kilograms worth two point five million dollars at
+  three fifteen a m"*. Off, you get "one thousand nine hundred ninety-one" and
+  "two point five em". Your captions still read 1991 — only the voice's copy
+  is rewritten.
+* **Pauses between scenes.** Rather than an identical gap 200 times, the rest
+  follows the punctuation: short after a comma, longer after a full stop,
+  longer still after a question, and nearly a second where a chapter turns
+  over. Set the overall length from Tight to Slow and heavy.
+* **Pace.** 0.85× unhurried to 1.15× urgent, applied by the voice itself
+  rather than by stretching the audio afterwards.
+
+Takes are also trimmed of the padding providers leave on each end, so the
+pause you asked for is the pause you get.
+
+## Output settings
+
+**Render → Show settings** reaches everything the encoder already honoured:
+frame size (including 1080×1920 for Shorts), frame rate, encoder — including
+NVENC and QuickSync — quality preset, caption style and word highlighting,
+caption timing method, Ken Burns, crossfade length, loudness target, a music
+bed, the AI disclaimer overlay, and your chapter titles.
+
 ## About face blurring
 
 The app can blur faces automatically — on scenes flagged as showing a real

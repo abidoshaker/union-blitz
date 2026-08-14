@@ -109,7 +109,7 @@ class FishProvider(TTSProvider):
 
     # -- synthesis --------------------------------------------------------
     def synthesize(self, text: str, voice_id: str, opts: TTSOpts) -> AudioResult:
-        payload = {
+        payload: dict[str, object] = {
             "text": text,
             "format": "wav",
             "normalize": True,
@@ -117,6 +117,11 @@ class FishProvider(TTSProvider):
         }
         if voice_id:
             payload["reference_id"] = voice_id
+        # Fish takes delivery as a prosody block. Sending it only when it
+        # differs from neutral keeps identical requests byte-identical, which
+        # is what lets their side cache and ours stay reproducible.
+        if abs(opts.speed - 1.0) > 0.01:
+            payload["prosody"] = {"speed": round(opts.speed, 3)}
 
         with self._client() as client:
             resp = client.post("/v1/tts", json=payload)

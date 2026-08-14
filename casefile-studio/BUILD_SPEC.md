@@ -200,6 +200,40 @@ class TTSProvider:
   paying), Piper, ElevenLabs, OpenAI TTS. Each declares `commercial_ok` and the
   UI shows it as a badge.
 
+### 5a. Delivery — why chunked narration sounds mechanical
+
+Per-scene synthesis is what makes an hour resumable, and it is also what makes
+it sound like a list being read: every take starts on the model's neutral
+opening pitch and ends on its neutral close, and butt-joining 200 of those
+with the same gap is a metronome. Three implemented countermeasures, all in
+`services/speech.py` and all optional per project:
+
+- **Spoken form** (`spoken_numbers`). Years, sums, times, dates, calibres and
+  agency initialisms are rewritten into the words a reader says before the
+  string reaches the voice: 1991 → "nineteen ninety-one", DEA → "D-E-A",
+  $2.5m → "two point five million dollars", November 12 → "November twelfth".
+  **The script is never touched** — captions, alignment and the storyboard all
+  keep the author's words. `align_service._retime_known_text` already keeps the
+  script's tokens and borrows only the recogniser's timings, which is exactly
+  the shape this needs.
+- **Punctuation-led rests** (`pause_scale`). The gap after a scene follows how
+  its line ended: ~0.14 s at a comma, ~0.34 s at a full stop, ~0.46 s at a
+  question, ~0.95 s where the chapter turns over, plus a ±0.06 s wobble
+  derived from a hash of the scene so it is **stable across re-renders** — a
+  random jitter would invalidate the checkpointed frame plan.
+- **Trimmed takes** (`trim_takes`). Providers pad each take by 100–300 ms and
+  are not consistent about it. Trimming at −50 dB, with a guard that restores
+  the untrimmed take if the result is under 0.12 s or less than half the
+  original, means the planned pause is the actual pause. The guard is what
+  keeps the silent draft voice from being deleted.
+
+`speech_rate` is passed to the provider as prosody (Fish `prosody.speed`, Edge
+`rate=±N%`, Kokoro `speed`) rather than applied as a post-hoc time stretch,
+which would shift formants and sound worse than the problem.
+
+All four appear in `TTSOpts.cache_key()`, so changing any of them re-records
+rather than replaying a stale take.
+
 ## 5b. Video and archival footage
 
 Scenes are backed by a still **or** a clip. Providers, all licensed APIs with
