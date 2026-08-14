@@ -25,7 +25,7 @@ export const api = {
     request<T>(p, { method: "POST", body: JSON.stringify(body ?? {}) }),
   patch: <T>(p: string, body: Json) =>
     request<T>(p, { method: "PATCH", body: JSON.stringify(body) }),
-  del: (p: string) => request<void>(p, { method: "DELETE" }),
+  del: <T = void>(p: string) => request<T>(p, { method: "DELETE" }),
 };
 
 export interface Project {

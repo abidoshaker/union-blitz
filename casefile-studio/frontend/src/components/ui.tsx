@@ -1,3 +1,5 @@
+import { useEffect } from "react";
+import { createPortal } from "react-dom";
 import type { ReactNode } from "react";
 
 export function Pill({
@@ -96,5 +98,101 @@ export function Empty({ title, children }: { title: string; children?: ReactNode
       <div className="font-display text-lg text-white">{title}</div>
       {children && <div className="mt-2 text-sm text-slate-400">{children}</div>}
     </div>
+  );
+}
+
+
+export function Modal({
+  title,
+  onClose,
+  children,
+  wide = false,
+}: {
+  title: string;
+  onClose: () => void;
+  children: ReactNode;
+  wide?: boolean;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && onClose();
+    window.addEventListener("keydown", onKey);
+    // Stop the page scrolling behind the dialog.
+    const previous = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = previous;
+    };
+  }, [onClose]);
+
+  // Rendered through a portal, not in place. The storyboard puts a CSS
+  // transform on every row (the virtualiser positions them, dnd-kit animates
+  // them), and a transformed ancestor becomes the containing block for
+  // position:fixed - so an inline dialog would be trapped inside its card
+  // instead of covering the page.
+  return createPortal(
+    <div
+      className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm"
+      onClick={onClose}
+    >
+      <div
+        className={`card max-h-[90vh] w-full overflow-auto p-5 ${wide ? "max-w-5xl" : "max-w-2xl"}`}
+        onClick={(e) => e.stopPropagation()}
+      >
+        <div className="mb-4 flex items-center gap-3">
+          <h3 className="text-lg">{title}</h3>
+          <button className="btn-ghost ml-auto !px-3 !py-1" onClick={onClose}>
+            Close
+          </button>
+        </div>
+        {children}
+      </div>
+    </div>,
+    document.body,
+  );
+}
+
+export function Spinner({ label }: { label: string }) {
+  return (
+    <div className="flex items-center gap-3 py-8 text-sm text-slate-400">
+      <span className="h-4 w-4 animate-spin rounded-full border-2 border-white/20 border-t-magenta" />
+      {label}
+    </div>
+  );
+}
+
+export function Confirm({
+  title,
+  body,
+  confirmLabel,
+  danger = false,
+  onConfirm,
+  onCancel,
+  busy = false,
+}: {
+  title: string;
+  body: ReactNode;
+  confirmLabel: string;
+  danger?: boolean;
+  onConfirm: () => void;
+  onCancel: () => void;
+  busy?: boolean;
+}) {
+  return (
+    <Modal title={title} onClose={onCancel}>
+      <div className="text-sm leading-relaxed text-slate-300">{body}</div>
+      <div className="mt-5 flex justify-end gap-2">
+        <button className="btn-ghost" onClick={onCancel} disabled={busy}>
+          Cancel
+        </button>
+        <button
+          className={danger ? "btn-danger" : "btn-primary"}
+          onClick={onConfirm}
+          disabled={busy}
+        >
+          {busy ? "Working…" : confirmLabel}
+        </button>
+      </div>
+    </Modal>
   );
 }

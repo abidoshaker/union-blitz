@@ -11,7 +11,7 @@ from sqlmodel import Session, select
 from ..config import settings
 from ..db import get_session
 from ..models import Chapter, Project, RenderOutput, Scene, Script
-from ..services import segmentation
+from ..services import housekeeping, segmentation
 from ..services.pipeline import project_settings
 
 router = APIRouter(prefix="/api/projects", tags=["projects"])
@@ -111,16 +111,45 @@ def patch_project(project_id: int, body: ProjectPatch, session: Session = Depend
     return _summary(session, project)
 
 
-@router.delete("/{project_id}", status_code=204)
-def delete_project(project_id: int, session: Session = Depends(get_session)) -> None:
-    project = session.get(Project, project_id)
-    if not project:
+class ClearIn(BaseModel):
+    drop_renders: bool = False
+    drop_sources: bool = False
+
+
+@router.delete("/{project_id}")
+def delete_project(project_id: int, session: Session = Depends(get_session)) -> dict:
+    """Delete the project and everything on disk that belongs to it.
+
+    Removing the rows and leaving gigabytes of clips and downloads behind would
+    be the worst of both worlds, so this always takes the files too.
+    """
+    try:
+        return housekeeping.delete_project(session, project_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
+@router.get("/{project_id}/usage")
+def project_usage(project_id: int) -> dict:
+    """What this project is costing in disk, broken down by what it is."""
+    return housekeeping.usage(project_id).as_dict()
+
+
+@router.post("/{project_id}/clear")
+def clear_project(project_id: int, body: ClearIn,
+                  session: Session = Depends(get_session)) -> dict:
+    """Free space without losing the project.
+
+    By default this removes only what can be rebuilt - scene clips, previews,
+    caches. Finished renders and downloaded sources are kept unless asked for,
+    because those cost an hour of encoding or real money to recreate.
+    """
+    if not session.get(Project, project_id):
         raise HTTPException(404, "Project not found")
-    for model in (Scene, Chapter, Script, RenderOutput):
-        for row in session.exec(select(model).where(model.project_id == project_id)).all():
-            session.delete(row)
-    session.delete(project)
-    session.commit()
+    return housekeeping.clear_workspace(
+        session, project_id,
+        drop_renders=body.drop_renders, drop_sources=body.drop_sources,
+    )
 
 
 @router.get("/{project_id}/script")

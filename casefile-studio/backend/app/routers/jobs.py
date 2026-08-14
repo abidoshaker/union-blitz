@@ -279,6 +279,17 @@ def list_renders(project_id: int, session: Session = Depends(get_session)) -> li
     ]
 
 
+@router.delete("/renders/{render_id}")
+def delete_render(render_id: int, session: Session = Depends(get_session)) -> dict:
+    """Remove one finished video, its chapters file and its subtitles."""
+    from ..services import housekeeping
+
+    try:
+        return housekeeping.delete_render(session, render_id)
+    except ValueError as exc:
+        raise HTTPException(404, str(exc)) from exc
+
+
 @router.get("/projects/{project_id}/preflight")
 def preflight(project_id: int, session: Session = Depends(get_session)) -> dict:
     project = session.get(Project, project_id)

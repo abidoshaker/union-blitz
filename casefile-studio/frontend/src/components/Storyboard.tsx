@@ -22,6 +22,7 @@ import { CSS } from "@dnd-kit/utilities";
 import { useVirtualizer } from "@tanstack/react-virtual";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { api, formatDuration, type Chapter, type Scene } from "../lib/api";
+import { ImagePicker, ScenePreview } from "./SceneTools";
 import { Empty, Pill } from "./ui";
 
 const FILTERS = [
@@ -33,7 +34,7 @@ const FILTERS = [
 ];
 
 const PAGE = 60;
-const ROW = 168;
+const ROW = 208;
 
 export function Storyboard({
   projectId,
@@ -391,6 +392,8 @@ function SceneCard({
   const [text, setText] = useState(scene.text);
   const [dirty, setDirty] = useState(false);
   const [target, setTarget] = useState(String(position));
+  const [tool, setTool] = useState<"" | "preview" | "image">("");
+  const [busy, setBusy] = useState("");
 
   useEffect(() => {
     setText(scene.text);
@@ -405,6 +408,18 @@ function SceneCard({
     await api.patch(`/api/scenes/${scene.id}`, { text });
     setDirty(false);
     onChanged();
+  };
+
+  const retake = async () => {
+    setBusy("audio");
+    try {
+      await api.post(`/api/scenes/${scene.id}/regenerate-audio`, {});
+      onChanged();
+    } catch (err) {
+      alert(`Could not re-record that line: ${(err as Error).message}`);
+    } finally {
+      setBusy("");
+    }
   };
 
   return (
@@ -522,7 +537,42 @@ function SceneCard({
             </button>
           )}
         </div>
+
+        {/* Retouching one scene: watch it, re-record it, change its picture. */}
+        <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
+          <button
+            className="btn-ghost !px-2.5 !py-1 text-xs"
+            onClick={() => setTool("preview")}
+            disabled={!scene.has_image}
+            title={scene.has_image ? "Watch this scene on its own" : "Needs a picture first"}
+          >
+            ▶ Watch
+          </button>
+          <button
+            className="btn-ghost !px-2.5 !py-1 text-xs"
+            onClick={retake}
+            disabled={busy === "audio"}
+            title="Record this line again"
+          >
+            {busy === "audio" ? "Recording…" : "↻ Re-record"}
+          </button>
+          <button
+            className="btn-ghost !px-2.5 !py-1 text-xs"
+            onClick={() => setTool("image")}
+            title="Pick a different picture, or upload your own"
+          >
+            ⛰ Change picture
+          </button>
+          {scene.audio_url && (
+            <audio src={scene.audio_url} controls className="ml-auto h-7 max-w-[220px]" />
+          )}
+        </div>
       </div>
+
+      {tool === "preview" && <ScenePreview scene={scene} onClose={() => setTool("")} />}
+      {tool === "image" && (
+        <ImagePicker scene={scene} onClose={() => setTool("")} onApplied={onChanged} />
+      )}
     </div>
   );
 }

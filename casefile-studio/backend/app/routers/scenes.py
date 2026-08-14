@@ -4,12 +4,17 @@ from __future__ import annotations
 
 from typing import Any
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from pathlib import Path
+
+from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 from sqlmodel import Session, func, select
 
 from ..db import get_session
 from ..models import Asset, Scene
+from ..providers.image import AssetCandidate
+from ..services import housekeeping, image_service, scene_service
 
 router = APIRouter(prefix="/api", tags=["scenes"])
 
@@ -240,3 +245,135 @@ def stats(project_id: int, session: Session = Depends(get_session)) -> dict:
         "ready": sum(1 for s in scenes if s.status == "ready"),
         "narration_sec": round(sum(s.duration for s in scenes), 1),
     }
+
+
+# ---------------------------------------------------------------------------
+# Working on one scene: preview it, re-record it, change its picture
+# ---------------------------------------------------------------------------
+
+class RetakeIn(BaseModel):
+    voice_id: str | None = None
+    tts_provider: str | None = None
+
+
+class SearchIn(BaseModel):
+    provider: str = "pexels"
+    query: str | None = None
+    count: int = 12
+
+
+class ChooseIn(BaseModel):
+    url: str
+    provider: str = ""
+    license: str = ""
+    attribution: str = ""
+    title: str = ""
+    width: int = 0
+    height: int = 0
+
+
+@router.post("/scenes/{scene_id}/preview")
+def preview_scene(scene_id: int, force: bool = False,
+                  session: Session = Depends(get_session)) -> dict:
+    """Render just this scene so it can be watched before the full render."""
+    scene = session.get(Scene, scene_id)
+    if not scene:
+        raise HTTPException(404, "Scene not found")
+    try:
+        path = scene_service.render_preview(session, scene, force=force)
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(500, f"Could not build the preview: {exc}") from exc
+    from .. import ffmpeg
+
+    return {
+        "url": f"/api/scenes/{scene_id}/preview/file",
+        "duration": round(ffmpeg.duration_of(path), 2),
+        "size_bytes": path.stat().st_size,
+    }
+
+
+@router.get("/scenes/{scene_id}/preview/file")
+def preview_file(scene_id: int, session: Session = Depends(get_session)) -> FileResponse:
+    scene = session.get(Scene, scene_id)
+    if not scene:
+        raise HTTPException(404, "Scene not found")
+    path = scene_service.preview_dir(int(scene.project_id)) / f"scene_{scene_id}_preview.mp4"
+    if not path.exists():
+        raise HTTPException(404, "No preview yet - build one first")
+    return FileResponse(path, media_type="video/mp4")
+
+
+@router.post("/scenes/{scene_id}/regenerate-audio")
+def regenerate_audio(scene_id: int, body: RetakeIn,
+                     session: Session = Depends(get_session)) -> dict:
+    scene = session.get(Scene, scene_id)
+    if not scene:
+        raise HTTPException(404, "Scene not found")
+    try:
+        result = scene_service.regenerate_audio(
+            session, scene, voice_id=body.voice_id, provider_name=body.tts_provider,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Could not record that line: {exc}") from exc
+    scene_service.invalidate_preview(int(scene.project_id), scene_id)
+    return result
+
+
+@router.post("/scenes/{scene_id}/search-images")
+def search_images(scene_id: int, body: SearchIn,
+                  session: Session = Depends(get_session)) -> dict:
+    """Candidate pictures for this scene, so one can be picked by eye."""
+    scene = session.get(Scene, scene_id)
+    if not scene:
+        raise HTTPException(404, "Scene not found")
+    try:
+        return scene_service.search_for_scene(
+            scene, provider_name=body.provider, count=body.count,
+            custom_query=body.query,
+        )
+    except ValueError as exc:
+        raise HTTPException(400, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, str(exc)) from exc
+
+
+@router.post("/scenes/{scene_id}/choose-image")
+def choose_image(scene_id: int, body: ChooseIn,
+                 session: Session = Depends(get_session)) -> dict:
+    scene = session.get(Scene, scene_id)
+    if not scene:
+        raise HTTPException(404, "Scene not found")
+    candidate = AssetCandidate(
+        url=body.url, provider=body.provider or "manual", license=body.license,
+        attribution=body.attribution, title=body.title,
+        width=body.width, height=body.height,
+    )
+    try:
+        return scene_service.apply_image(session, scene, candidate)
+    except image_service.RealPersonBlocked as exc:
+        raise HTTPException(409, str(exc)) from exc
+    except Exception as exc:
+        raise HTTPException(502, f"Could not use that image: {exc}") from exc
+
+
+@router.post("/scenes/{scene_id}/upload-image")
+async def upload_scene_image(scene_id: int, file: UploadFile = File(...),
+                             session: Session = Depends(get_session)) -> dict:
+    """Use your own picture for this scene."""
+    scene = session.get(Scene, scene_id)
+    if not scene:
+        raise HTTPException(404, "Scene not found")
+    blob = await file.read()
+    candidate = AssetCandidate(
+        url="", provider="upload", license="Uploaded by the user",
+        attribution="Own material", title=file.filename or "upload",
+        extra={"bytes": blob},
+    )
+    try:
+        return scene_service.apply_image(session, scene, candidate)
+    except Exception as exc:
+        raise HTTPException(400, f"Could not read that image: {exc}") from exc

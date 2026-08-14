@@ -22,6 +22,10 @@ import httpx
 
 from ..keystore import get_key
 from .image.base import AssetCandidate
+from .internet_archive import (
+    attribution_of, download_url, item_files, licence_text, pick_video_file,
+    search_docs, thumb_url,
+)
 
 log = logging.getLogger("casefile.video")
 
@@ -154,21 +158,11 @@ class PixabayVideoProvider(VideoProvider):
         return out
 
 
-# Collections that are wholesale public domain. Internet Archive's per-item
-# licence metadata is patchy, so membership here is treated as evidence.
-PD_COLLECTIONS = {
-    "prelinger", "publicmoviescollection", "moviesandfilms", "newsandpublicaffairs",
-    "fedflix", "nationalarchives", "usnationalarchives", "computerchronicles",
-}
-PD_LICENCE_HINTS = ("publicdomain", "creativecommons.org/publicdomain", "/cc0", "/by/", "/by-sa/")
-
-
 class InternetArchiveVideoProvider(VideoProvider):
     """Archival footage. No key required.
 
-    Licensing here is genuinely mixed, so `public_domain_only` is on by default
-    and anything without positive evidence of a free licence is dropped rather
-    than surfaced with a vague warning.
+    Shares its search, licence filtering and file selection with the image
+    adapter (providers/internet_archive.py) so the two cannot drift apart.
     """
 
     name = "internet_archive"
@@ -178,81 +172,36 @@ class InternetArchiveVideoProvider(VideoProvider):
 
     def search(self, query: str, *, count: int = 10, opts: dict | None = None) -> list[AssetCandidate]:
         opts = opts or {}
-        pd_only = opts.get("public_domain_only", True)
-
-        params = {
-            "q": f'({query}) AND mediatype:(movies)',
-            "fl[]": ["identifier", "title", "licenseurl", "collection", "year", "downloads"],
-            "rows": str(min(count * 3, 60)),
-            "page": "1",
-            "output": "json",
-            "sort[]": "downloads desc",
-        }
         with httpx.Client(timeout=45, headers={"User-Agent": "CaseFileStudio/1.0"}) as client:
-            resp = client.get("https://archive.org/advancedsearch.php", params=params)
-            resp.raise_for_status()
-            docs = (resp.json().get("response") or {}).get("docs", [])
-
+            docs = search_docs(
+                query, mediatype="movies", rows=min(count * 3, 60),
+                pd_only=opts.get("public_domain_only", True), client=client,
+            )
             out: list[AssetCandidate] = []
             for doc in docs:
                 if len(out) >= count:
                     break
-                licence = (doc.get("licenseurl") or "").lower()
-                collections = {c.lower() for c in _as_list(doc.get("collection"))}
-                free = any(h in licence for h in PD_LICENCE_HINTS) or bool(collections & PD_COLLECTIONS)
-                if pd_only and not free:
+                identifier = doc.get("identifier")
+                if not identifier:
                     continue
-
-                candidate = self._best_file(client, doc, licence, collections)
-                if candidate:
-                    out.append(candidate)
+                chosen = pick_video_file(
+                    item_files(identifier, client=client), max_bytes=self.max_bytes
+                )
+                if not chosen:
+                    continue
+                out.append(AssetCandidate(
+                    url=download_url(identifier, chosen["name"]),
+                    thumb=thumb_url(identifier),
+                    license=licence_text(doc),
+                    attribution=attribution_of(doc),
+                    provider=self.name,
+                    width=int(chosen.get("width") or 0),
+                    height=int(chosen.get("height") or 0),
+                    title=str(doc.get("title") or identifier),
+                    kind="video",
+                    has_audio=True,   # archival footage usually carries a soundtrack
+                ))
         return out
-
-    def _best_file(self, client: httpx.Client, doc: dict, licence: str,
-                   collections: set[str]) -> AssetCandidate | None:
-        identifier = doc.get("identifier")
-        if not identifier:
-            return None
-        try:
-            meta = client.get(f"https://archive.org/metadata/{identifier}", timeout=30).json()
-        except (httpx.HTTPError, ValueError):
-            return None
-
-        best = None
-        for entry in meta.get("files", []):
-            name = entry.get("name", "")
-            if not name.lower().endswith((".mp4", ".m4v", ".webm")):
-                continue
-            size = int(entry.get("size") or 0)
-            if size and size > self.max_bytes:
-                continue
-            # Prefer the derived mp4s, which are web-friendly and modest in size.
-            score = (1 if "512kb" in name.lower() or "h.264" in (entry.get("format", "").lower()) else 0, -size)
-            if best is None or score > best[0]:
-                best = (score, entry)
-        if not best:
-            return None
-
-        entry = best[1]
-        return AssetCandidate(
-            url=f"https://archive.org/download/{identifier}/{entry['name']}",
-            thumb=f"https://archive.org/services/img/{identifier}",
-            license=licence or ("Public domain collection: " + ", ".join(sorted(collections & PD_COLLECTIONS))),
-            attribution=f"{doc.get('title', identifier)} - Internet Archive ({identifier})",
-            provider=self.name,
-            width=int(entry.get("width") or 0),
-            height=int(entry.get("height") or 0),
-            title=str(doc.get("title") or identifier),
-            kind="video",
-            duration=float(entry.get("length") or 0) if str(entry.get("length") or "").replace(".", "").isdigit() else 0.0,
-            has_audio=True,      # archival footage usually carries a soundtrack
-        )
-
-
-def _as_list(value: Any) -> list[str]:
-    if value is None:
-        return []
-    return list(value) if isinstance(value, (list, tuple)) else [str(value)]
 
 
 @lru_cache(maxsize=1)

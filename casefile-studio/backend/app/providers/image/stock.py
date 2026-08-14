@@ -10,6 +10,10 @@ from __future__ import annotations
 import httpx
 
 from ...keystore import get_key
+from ..internet_archive import (
+    attribution_of, download_url, item_files, licence_text, pick_image_file,
+    search_docs, thumb_url,
+)
 from .base import AssetCandidate, ImageProvider, ImageUnavailable
 
 
@@ -131,3 +135,56 @@ def _plain(html: str) -> str:
     import re
 
     return re.sub(r"<[^>]+>", "", html or "").strip()[:300]
+
+
+class InternetArchiveImageProvider(ImageProvider):
+    """Archival stills from the Internet Archive. No API key.
+
+    The best free source of period photographs for true crime - and previously
+    missing entirely: the Archive was wired up as a video source only, so
+    selecting it for images silently returned nothing.
+
+    Licence metadata on the Archive is patchy, so `public_domain_only` is on by
+    default and items without positive evidence of a free licence are dropped
+    rather than surfaced with a vague warning.
+    """
+
+    name = "internet_archive_image"
+    label = "Internet Archive (archival stills)"
+    kind = "stock"
+    requires_attribution = True
+
+    def available(self) -> tuple[bool, str]:
+        return True, ""
+
+    def search(self, query: str, *, count: int = 12, opts: dict | None = None) -> list[AssetCandidate]:
+        opts = opts or {}
+        pd_only = opts.get("public_domain_only", True)
+
+        with httpx.Client(timeout=45, headers={"User-Agent": "CaseFileStudio/1.0"}) as client:
+            docs = search_docs(
+                query, mediatype="image", rows=min(count * 3, 60),
+                pd_only=pd_only, client=client,
+            )
+            out: list[AssetCandidate] = []
+            for doc in docs:
+                if len(out) >= count:
+                    break
+                identifier = doc.get("identifier")
+                if not identifier:
+                    continue
+                chosen = pick_image_file(item_files(identifier, client=client))
+                if not chosen:
+                    continue
+                out.append(AssetCandidate(
+                    url=download_url(identifier, chosen["name"]),
+                    thumb=thumb_url(identifier),
+                    license=licence_text(doc),
+                    attribution=attribution_of(doc),
+                    provider=self.name,
+                    width=int(chosen.get("width") or 0),
+                    height=int(chosen.get("height") or 0),
+                    title=str(doc.get("title") or identifier),
+                    kind="image",
+                ))
+        return out

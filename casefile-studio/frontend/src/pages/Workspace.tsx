@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { JobBar, JobHistory } from "../components/JobBar";
 import { Storyboard } from "../components/Storyboard";
-import { Banner, Empty, Pill, Stat } from "../components/ui";
+import { Banner, Confirm, Empty, Modal, Pill, Stat } from "../components/ui";
 import {
   api,
   type Json,
@@ -416,10 +416,15 @@ function RenderTab({
 }) {
   const [check, setCheck] = useState<Preflight | null>(null);
   const [renders, setRenders] = useState<any[]>([]);
+  const [usage, setUsage] = useState<Json | null>(null);
+  const [playing, setPlaying] = useState<any>(null);
+  const [confirm, setConfirm] = useState<null | { kind: "render" | "clear" | "wipe"; id?: number }>(null);
+  const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
     setCheck(await api.get<Preflight>(`/api/projects/${project.id}/preflight`));
     setRenders(await api.get<any[]>(`/api/projects/${project.id}/renders`));
+    setUsage(await api.get<Json>(`/api/projects/${project.id}/usage`));
   }, [project.id]);
 
   useEffect(() => {
@@ -502,12 +507,130 @@ function RenderTab({
                   )}
                 </div>
               </div>
+              <button className="btn-amber !px-3 !py-1" onClick={() => setPlaying(r)}>
+                ▶ Watch
+              </button>
               <a className="btn-ghost" href={r.download_url} download>
                 Download
               </a>
+              <button
+                className="btn-danger !px-3 !py-1"
+                onClick={() => setConfirm({ kind: "render", id: r.id })}
+              >
+                Delete
+              </button>
             </div>
           ))}
         </div>
+      )}
+
+      {usage && (
+        <div className="card p-4">
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <h3 className="text-base">Disk</h3>
+            <span className="font-mono text-sm text-slate-300">
+              {formatBytes(Number(usage.total_bytes))}
+            </span>
+            <span className="text-xs text-slate-500">
+              scene clips {formatBytes(Number(usage.clip_bytes))} · finished videos{" "}
+              {formatBytes(Number(usage.render_bytes))} · downloads{" "}
+              {formatBytes(Number(usage.source_bytes))} · previews{" "}
+              {formatBytes(Number(usage.preview_bytes))}
+            </span>
+            <div className="ml-auto flex gap-2">
+              <button className="btn-ghost" onClick={() => setConfirm({ kind: "clear" })}>
+                Free up space
+              </button>
+              <button className="btn-danger" onClick={() => setConfirm({ kind: "wipe" })}>
+                Clear everything
+              </button>
+            </div>
+          </div>
+          <p className="text-xs text-slate-500">
+            <strong className="text-slate-400">Free up space</strong> deletes scene clips and
+            previews only — they rebuild themselves on the next render, and your finished videos and
+            downloaded footage are untouched.{" "}
+            <strong className="text-slate-400">Clear everything</strong> also removes the finished
+            videos and every downloaded image and clip, leaving the script and scene list.
+          </p>
+        </div>
+      )}
+
+      {playing && (
+        <Modal title={`${playing.variant} · ${formatDuration(playing.duration)}`} onClose={() => setPlaying(null)} wide>
+          <video
+            src={playing.download_url}
+            controls
+            autoPlay
+            className="w-full rounded-xl border border-white/10 bg-black"
+          />
+          <div className="mt-2 flex flex-wrap gap-3 text-xs text-slate-400">
+            <span>{formatBytes(playing.size_bytes)}</span>
+            {playing.ad_breaks?.length > 0 && (
+              <span className="text-amber">
+                mid-roll markers at{" "}
+                {playing.ad_breaks.map((b: number) => formatDuration(b)).join(", ")}
+              </span>
+            )}
+          </div>
+        </Modal>
+      )}
+
+      {confirm && (
+        <Confirm
+          title={
+            confirm.kind === "render"
+              ? "Delete this video?"
+              : confirm.kind === "clear"
+                ? "Free up space?"
+                : "Clear everything?"
+          }
+          danger={confirm.kind !== "clear"}
+          busy={busy}
+          confirmLabel={
+            confirm.kind === "render"
+              ? "Delete the video"
+              : confirm.kind === "clear"
+                ? "Delete the scene clips"
+                : "Delete videos and downloads"
+          }
+          body={
+            confirm.kind === "render" ? (
+              <>The MP4, its subtitles and its chapters file will be removed from your disk.</>
+            ) : confirm.kind === "clear" ? (
+              <>
+                Removes scene clips and previews — about{" "}
+                {formatBytes(Number(usage?.clip_bytes ?? 0) + Number(usage?.preview_bytes ?? 0))}.
+                They rebuild on the next render. Nothing else is touched.
+              </>
+            ) : (
+              <>
+                Removes every finished video and every downloaded image and clip — about{" "}
+                {formatBytes(Number(usage?.total_bytes ?? 0))}. Your script and scene list stay, but
+                narration and pictures will have to be sourced again.
+              </>
+            )
+          }
+          onCancel={() => setConfirm(null)}
+          onConfirm={async () => {
+            setBusy(true);
+            try {
+              if (confirm.kind === "render") {
+                await api.del(`/api/renders/${confirm.id}`);
+              } else {
+                await api.post(`/api/projects/${project.id}/clear`, {
+                  drop_renders: confirm.kind === "wipe",
+                  drop_sources: confirm.kind === "wipe",
+                });
+              }
+              await load();
+              onRan();
+            } finally {
+              setBusy(false);
+              setConfirm(null);
+            }
+          }}
+        />
       )}
 
       {chapters.length > 0 && (
