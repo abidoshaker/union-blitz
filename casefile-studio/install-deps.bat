@@ -21,8 +21,33 @@ rem
 rem  Safe to re-run. Nothing here needs Administrator.
 rem ===========================================================================
 
+rem A batch file that dies part-way - a PATH too long for cmd, a bad block, an
+rem installer that takes the shell down with it - closes the console when it was
+rem started by double-clicking, so you never get to read what went wrong. Run the
+rem real work in a child cmd and hold this window open whatever happens to it.
+if not defined CASEFILE_INSTALL_CHILD (
+  set "CASEFILE_INSTALL_CHILD=1"
+  cmd /d /s /c ""%~f0" %*"
+  set "RC=!ERRORLEVEL!"
+  echo.
+  if not "!RC!"=="0" (
+    echo   ------------------------------------------------------------------
+    echo    The installer stopped early ^(exit code !RC!^).
+    echo    What it managed to do is in install-log.txt next to this file.
+    echo   ------------------------------------------------------------------
+    echo.
+  )
+  pause
+  exit /b !RC!
+)
+
 set "ROOT=%~dp0"
 if "%ROOT:~-1%"=="\" set "ROOT=%ROOT:~0,-1%"
+
+rem Called by full path: half the point of refresh_path is that PATH may be in
+rem a bad way, and a fallback that cannot be found is not a fallback.
+set "PS=%SystemRoot%\System32\WindowsPowerShell\v1.0\powershell.exe"
+if not exist "%PS%" set "PS=powershell"
 set "VENV=%ROOT%\.venv"
 set "VPY=%VENV%\Scripts\python.exe"
 set "TOOLDIR=%LOCALAPPDATA%\CaseFileStudio\tools"
@@ -105,7 +130,7 @@ echo   Next:  run.bat        starts the app on http://localhost:8760
 echo          doctor.bat     re-checks the environment at any time
 echo ===========================================================================
 echo.
-pause
+rem The wrapper at the top of this file holds the window open, so no pause here.
 exit /b 0
 
 
@@ -126,6 +151,39 @@ exit /b 0
 echo.
 echo  -- %~1
 call :log "STEP %~1"
+rem PATH length is the thing most likely to end this script without a word, so
+rem record it at every step. If the install ever dies again, install-log.txt
+rem says how close it was to cmd's 8,191-character limit when it happened.
+call :log_pathlen
+exit /b 0
+
+:log_pathlen
+set "PLEN=0"
+if defined PATH call :strlen PATH PLEN
+call :log "PATH is %PLEN% characters"
+if %PLEN% GTR 7500 (
+  echo      WARNING: PATH is %PLEN% characters, near the 8191 limit for cmd.
+  echo      Tidy it in System Properties ^> Environment Variables if this fails.
+)
+exit /b 0
+
+:strlen
+rem %1 = name of the variable to measure, %2 = name of the variable to set.
+rem Halving search: an 8,000-character PATH is not something to count one at a
+rem time inside a batch file.
+setlocal EnableDelayedExpansion
+rem The leading sentinel is what makes the count come out as the length of the
+rem value rather than one short. It is a rough figure - a path containing "!"
+rem measures a little low - but this is a warning threshold, not a gate.
+set "S=#!%~1!"
+set "L=0"
+for %%A in (4096 2048 1024 512 256 128 64 32 16 8 4 2 1) do (
+  if "!S:~%%A!" NEQ "" (
+    set /a L+=%%A
+    set "S=!S:~%%A!"
+  )
+)
+endlocal & set "%~2=%L%"
 exit /b 0
 
 :log
@@ -140,12 +198,49 @@ exit /b 0
 rem --- refresh PATH from the registry so tools installed by winget in this
 rem     same session become visible without reopening the terminal ------------
 :refresh_path
-set "REGSYS="
-set "REGUSR="
-for /f "tokens=2,*" %%A in ('reg query "HKLM\SYSTEM\CurrentControlSet\Control\Session Manager\Environment" /v Path 2^>nul ^| find "REG_"') do set "REGSYS=%%B"
-for /f "tokens=2,*" %%A in ('reg query "HKCU\Environment" /v Path 2^>nul ^| find "REG_"') do set "REGUSR=%%B"
-if defined REGSYS set "PATH=%REGSYS%;%PATH%"
-if defined REGUSR set "PATH=%REGUSR%;%PATH%"
+rem Pick up entries an installer has just added to the persistent PATH.
+rem
+rem This used to read the two registry values and prepend both onto %PATH% on
+rem every call. Two things were wrong with that, and together they closed the
+rem window part-way through the install:
+rem
+rem   * %PATH% already contains those entries, so each call very nearly doubled
+rem     it. Three calls - Python, FFmpeg, Node - take a typical 2,000-character
+rem     PATH past cmd's 8,191-character ceiling, at which point "set" fails and
+rem     the batch dies. A double-clicked window dies with it.
+rem   * Path is stored as REG_EXPAND_SZ, so "reg query" hands back the literal
+rem     text %SystemRoot%\system32. cmd does not expand that a second time, so
+rem     System32 quietly fell off the PATH and "where", "findstr" and the rest
+rem     stopped resolving from that point on.
+rem
+rem PowerShell returns the values already expanded, so merge, de-duplicate and
+rem length-check there, and only adopt the result if it is sane.
+set "PATHTMP=%TEMP%\casefile-path-%RANDOM%%RANDOM%.txt"
+"%PS%" -NoProfile -ExecutionPolicy Bypass -Command "$seen=New-Object System.Collections.Generic.HashSet[string]([StringComparer]::OrdinalIgnoreCase); $keep=New-Object System.Collections.Generic.List[string]; foreach($scope in @('Machine','User')){ foreach($entry in ([Environment]::GetEnvironmentVariable('Path',$scope) -split ';')){ $t=$entry.Trim().TrimEnd('\'); if($t -and $seen.Add($t)){ $keep.Add($t) } } }; $joined=($keep -join ';'); if($joined.Length -lt 7000){ [IO.File]::WriteAllText($env:PATHTMP,$joined) }" >> "%LOG%" 2>&1
+
+if not exist "%PATHTMP%" (
+  rem Either PowerShell is locked down, or the merged PATH came back too long
+  rem to be safe. Keeping the PATH we already have is always survivable: a tool
+  rem installed a moment ago is simply not visible until a new window is opened,
+  rem and this script is safe to re-run.
+  echo      could not refresh PATH - if the next step says a tool is missing,
+  echo      close this window, open a new one, and run install-deps.bat again
+  call :log "refresh_path: kept the existing PATH"
+  exit /b 0
+)
+
+rem Read it with delayed expansion off, or a directory containing "!" is eaten,
+rem then hand the value back out across the endlocal.
+setlocal DisableDelayedExpansion
+set "MERGED="
+for /f "usebackq delims=" %%P in ("%PATHTMP%") do set "MERGED=%%P"
+del "%PATHTMP%" >nul 2>&1
+if not defined MERGED (
+  endlocal
+  exit /b 0
+)
+endlocal & set "PATH=%MERGED%"
+call :log "refresh_path: PATH rebuilt from the registry"
 exit /b 0
 
 :check_winget
@@ -401,7 +496,7 @@ where curl >nul 2>&1
 if not errorlevel 1 (
   curl -L --fail --retry 3 --retry-delay 2 -o "%~2" "%~1" >> "%LOG%" 2>&1
 ) else (
-  powershell -NoProfile -ExecutionPolicy Bypass -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;Invoke-WebRequest -Uri '%~1' -OutFile '%~2' -UseBasicParsing}catch{exit 1}" >> "%LOG%" 2>&1
+  "%PS%" -NoProfile -ExecutionPolicy Bypass -Command "try{[Net.ServicePointManager]::SecurityProtocol=[Net.SecurityProtocolType]::Tls12;Invoke-WebRequest -Uri '%~1' -OutFile '%~2' -UseBasicParsing}catch{exit 1}" >> "%LOG%" 2>&1
 )
 if not exist "%~2" (
   echo      download failed: %~1
@@ -425,14 +520,12 @@ echo  Python 3.12 could not be installed automatically.
 echo  Install it from https://www.python.org/downloads/ and tick
 echo  "Add python.exe to PATH", then re-run this script.
 echo.
-pause
 exit /b 1
 
 :fail_venv
 echo.
 echo  The virtual environment could not be created. See install-log.txt.
 echo.
-pause
 exit /b 1
 
 :usage

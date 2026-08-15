@@ -97,6 +97,34 @@ anything. Swap in Fish Audio and real images in Settings when you are ready.
   the window, open a new one, and run `install-deps.bat` again. Windows only
   shows newly installed programs to new windows.
 
+### The installer window used to close itself around step 4
+
+Fixed. If you saw this, pull the latest and re-run — nothing needs undoing,
+the script is safe to run again over a half-finished install.
+
+What happened: after each install the script re-read the saved PATH out of the
+registry and stuck it on the front of the PATH it already had. Since the PATH
+it already had was that same list, every one of those calls added the whole
+thing again. Three calls — Python, FFmpeg, Node — turn a 2,100-character PATH
+into 8,400, and cmd cannot hold a variable longer than 8,191. At that point the
+script dies, and a window opened by double-clicking dies with it, which is why
+there was nothing to read.
+
+Anyone whose Windows PATH is under about 2,000 characters never saw it. Over
+that, it always failed, always at step 4.
+
+Three changes:
+
+* PATH is now merged and de-duplicated instead of prepended, so calling it ten
+  times gives the same PATH as calling it once. It also refuses a result over
+  7,000 characters rather than trying and dying.
+* The installer runs its real work in a child window and **holds the console
+  open no matter how that child ends**. If anything else ever kills it
+  mid-way, you will get to read the screen and the exit code.
+* Every step records the current PATH length in `install-log.txt`, and warns
+  on screen past 7,500 characters — so a PATH problem announces itself instead
+  of ending the install.
+
 ## About the hour-long scripts
 
 This build is set up for full-length videos, roughly 9,000 words / 60 minutes.
