@@ -1,0 +1,10 @@
+# Default subtitle timing tier: faster-whisper (CTranslate2, INT8) with
+# word_timestamps=True. No torch, no CUDA. ~250 MB of wheels.
+#
+# Accuracy: roughly 100-300 ms per word. Good enough for karaoke captions.
+# For the sub-100 ms forced alignment described in the spec, also install
+# requirements/align-full.txt.
+
+faster-whisper>=1.0.3
+ctranslate2>=4.3
+onnxruntime>=1.18

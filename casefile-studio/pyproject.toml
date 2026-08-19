@@ -1,0 +1,32 @@
+[project]
+name = "casefile-studio"
+version = "0.1.0"
+description = "Local browser-based script-to-video pipeline for long-form true-crime narration"
+requires-python = ">=3.10"
+readme = "README-WINDOWS.md"
+
+# Runtime dependencies are kept in requirements/*.txt so install-deps.bat can
+# install them in tiers: a beginner should not need a 2.5 GB torch download to
+# get a working app.
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["app"]
+package-dir = { "" = "backend" }
+
+[tool.pytest.ini_options]
+testpaths = ["backend/tests"]
+pythonpath = ["backend"]
+addopts = "-q"
+filterwarnings = ["ignore::DeprecationWarning"]
+
+[tool.ruff]
+line-length = 110
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
+ignore = ["B008"]   # FastAPI Depends() in defaults is the documented pattern

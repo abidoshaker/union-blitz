@@ -1,0 +1,64 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  html,
+  body,
+  #root {
+    height: 100%;
+  }
+  body {
+    @apply bg-base text-slate-200 font-body antialiased;
+    background-image:
+      radial-gradient(900px 500px at 12% -8%, rgba(255, 45, 117, 0.13), transparent 60%),
+      radial-gradient(800px 460px at 92% 0%, rgba(124, 58, 237, 0.15), transparent 60%);
+    background-attachment: fixed;
+  }
+  h1, h2, h3 {
+    @apply font-display tracking-tight text-white;
+  }
+  ::-webkit-scrollbar { width: 10px; height: 10px; }
+  ::-webkit-scrollbar-thumb { @apply bg-raised rounded-full; }
+  ::-webkit-scrollbar-track { background: transparent; }
+}
+
+@layer components {
+  .card {
+    @apply bg-surface/85 border border-white/10 rounded-2xl shadow-card backdrop-blur-sm;
+  }
+  .btn {
+    @apply inline-flex items-center justify-center gap-2 rounded-xl px-4 py-2
+           text-sm font-semibold transition-all disabled:opacity-40
+           disabled:cursor-not-allowed select-none;
+  }
+  .btn-primary {
+    @apply btn bg-accent text-white shadow-glow hover:brightness-110 active:scale-[0.98];
+  }
+  .btn-amber {
+    @apply btn bg-amber text-black hover:brightness-105 active:scale-[0.98];
+  }
+  .btn-ghost {
+    @apply btn bg-white/5 text-slate-200 border border-white/10 hover:bg-white/10;
+  }
+  .btn-danger {
+    @apply btn bg-danger/15 text-danger border border-danger/30 hover:bg-danger/25;
+  }
+  .input {
+    @apply w-full bg-base/70 border border-white/10 rounded-xl px-3 py-2 text-sm
+           text-slate-100 placeholder:text-slate-500 outline-none
+           focus:border-magenta/60 focus:ring-2 focus:ring-magenta/20;
+  }
+  .pill {
+    @apply inline-flex items-center gap-1.5 rounded-full px-2.5 py-0.5
+           text-[11px] font-semibold uppercase tracking-wide;
+  }
+  .tape {
+    background: repeating-linear-gradient(
+      -45deg, rgba(239, 68, 68, 0.16) 0 12px, transparent 12px 24px
+    );
+  }
+  .label {
+    @apply block text-[11px] font-semibold uppercase tracking-wider text-slate-400 mb-1.5;
+  }
+}

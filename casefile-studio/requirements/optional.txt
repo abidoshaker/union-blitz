@@ -1,0 +1,17 @@
+# Nice-to-have provider SDKs. Every one of these is optional: the app talks to
+# each service over plain HTTPS with httpx, so a failed install here degrades
+# one provider, never the app.
+#
+# Installed with:  install-deps.bat --with-optional
+
+# Fish Audio. PyPI package name is fish-audio-sdk; the GitHub repo is
+# fishaudio/fish-audio-python, which is why the two names get mixed up.
+# The Fish adapter must work without this installed.
+fish-audio-sdk>=2024.12.5
+
+# LLM scene splitting
+anthropic>=0.40
+openai>=1.50
+
+# Extra local TTS. Wheel availability on Windows is spotty; non-fatal.
+piper-tts>=1.2.0
