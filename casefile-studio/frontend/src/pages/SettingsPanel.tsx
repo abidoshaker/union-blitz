@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../lib/api";
+import { forgetProviders } from "../components/SourcePicker";
 import { Banner, Pill } from "../components/ui";
 
 interface ProviderInfo {
@@ -36,9 +37,16 @@ export function SettingsPanel() {
   }, []);
 
   const save = async (provider: string) => {
-    await api.post("/api/settings/keys", { provider, value: values[provider] ?? "" });
-    setValues((v) => ({ ...v, [provider]: "" }));
-    await load();
+    try {
+      await api.post("/api/settings/keys", { provider, value: values[provider] ?? "" });
+      setValues((v) => ({ ...v, [provider]: "" }));
+      // A new key changes which sources are usable, so the cached list is wrong.
+      forgetProviders();
+      await load();
+    } catch (err) {
+      // A key that will not save must say so, not clear the box and look done.
+      setResults((r) => ({ ...r, [provider]: { ok: false, message: (err as Error).message } }));
+    }
   };
 
   const test = async (provider: string) => {

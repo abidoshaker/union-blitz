@@ -168,13 +168,21 @@ def batch_preview(body: BatchIn, session: Session = Depends(get_session)) -> dic
              "before": s.visual_source, "after": body.payload.get("visual_source", s.visual_source)}
             for s in scenes
         ]
+    elif body.op == "source-images":
+        # Only the scenes with nothing yet, so a batch cannot quietly discard
+        # a picture that was chosen by hand.
+        changes = [
+            {"scene_id": s.id, "order_index": s.order_index, "before": "", "after": "sourced"}
+            for s in scenes if not s.asset_id
+        ]
     else:
         changes = [{"scene_id": s.id, "order_index": s.order_index} for s in scenes]
 
+    counted = body.op in ("find-replace", "source-images")
     return {
         "op": body.op,
         "scene_count": len(scenes),
-        "affected": len(changes) if body.op == "find-replace" else len(scenes),
+        "affected": len(changes) if counted else len(scenes),
         "estimated_cost_usd": round(float(cost.get("cost_usd", 0.0)), 4),
         "changes": changes[:50],
         "truncated": len(changes) > 50,
@@ -213,20 +221,33 @@ def batch_apply(body: BatchIn, session: Session = Depends(get_session)) -> dict:
         session.commit()
         return {"applied": len(scenes)}
 
-    if body.op in ("set-visual-source", "swap-images"):
+    if body.op in ("set-visual-source", "swap-images", "source-images"):
+        # swap-images throws away what is there and finds something else.
+        # source-images fills in the scenes that have nothing, leaving pictures
+        # you have already chosen or fixed by hand alone.
         source = body.payload.get("visual_source")
-        for scene in scenes:
+        replacing = body.op != "source-images"
+        targets = scenes if replacing else [s for s in scenes if not s.asset_id]
+        if not targets:
+            raise HTTPException(400, "Every selected scene already has a picture.")
+
+        for scene in targets:
             if source:
                 scene.visual_source = source
-            scene.asset_id = None
+            if replacing:
+                scene.asset_id = None
             session.add(scene)
         session.commit()
+
         job_id = queue().submit("images", project_id=body.project_id, params={
             "project_id": body.project_id,
-            "scene_ids": [int(s.id) for s in scenes],
+            "scene_ids": [int(s.id) for s in targets],
+            # `image_sources` and `video_sources` are lists of libraries to try,
+            # and both are project settings, so they pass straight through as
+            # a per-run override.
             **{k: v for k, v in body.payload.items() if k != "visual_source"},
         })
-        return {"applied": len(scenes), "job_id": job_id}
+        return {"applied": len(targets), "job_id": job_id}
 
     if body.op == "regenerate-audio":
         for scene in scenes:

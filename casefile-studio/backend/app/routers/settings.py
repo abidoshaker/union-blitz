@@ -11,6 +11,7 @@ from pydantic import BaseModel
 from .. import ffmpeg, keystore
 from ..config import settings as app_settings
 from ..providers import image as image_providers
+from ..providers import video as video_providers
 from ..providers import llm as llm_providers
 from ..providers import tts as tts_providers
 from ..security import redact
@@ -54,6 +55,7 @@ def get_settings() -> dict[str, Any]:
         ],
         "tts": tts_providers.describe_all(),
         "images": image_providers.describe_all(),
+        "video": video_providers.describe_all(),
         "llm": llm_providers.describe_all(),
         "align_methods": align_service.available_methods(),
         "defaults": {

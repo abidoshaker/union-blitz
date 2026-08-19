@@ -64,6 +64,10 @@ export function Storyboard({
   const [offset, setOffset] = useState(0);
   const [filter, setFilter] = useState("");
   const [chapterId, setChapterId] = useState<number | null>(null);
+  // Typed text and the term actually in flight are separate: searching on
+  // every keystroke over 240 scenes is a request per letter.
+  const [typed, setTyped] = useState("");
+  const [search, setSearch] = useState("");
   const [loading, setLoading] = useState(false);
   const [dragging, setDragging] = useState<Scene | null>(null);
   const [note, setNote] = useState("");
@@ -74,6 +78,7 @@ export function Storyboard({
     try {
       const params = new URLSearchParams({ offset: String(nextOffset), limit: String(PAGE) });
       if (filter) params.set("filter", filter);
+      if (search) params.set("q", search);
       if (chapterId != null) params.set("chapter_id", String(chapterId));
       const page = await api.get<{ total: number; items: Scene[] }>(
         `/api/projects/${projectId}/scenes?${params}`,
@@ -89,7 +94,13 @@ export function Storyboard({
   useEffect(() => {
     load(0, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [projectId, filter, chapterId]);
+  }, [projectId, filter, chapterId, search]);
+
+  // Settle for a moment before asking the server.
+  useEffect(() => {
+    const timer = setTimeout(() => setSearch(typed.trim()), 250);
+    return () => clearTimeout(timer);
+  }, [typed]);
 
   const rowVirtualizer = useVirtualizer({
     count: scenes.length,
@@ -202,10 +213,37 @@ export function Storyboard({
     await moveTo(scene, scene.order_index + 1 + delta);
   };
 
-  const filtered = filter !== "" || chapterId != null;
+  const filtered = filter !== "" || chapterId != null || search !== "";
 
   return (
     <div className="space-y-3">
+      {/* Finding a line by its words, not by scrolling. The search runs on the
+          server, so it reaches all 240 scenes and not just the loaded page. */}
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="relative min-w-[240px] flex-1">
+          <input
+            className="input pr-16"
+            placeholder="Find a scene by its words…"
+            value={typed}
+            onChange={(e) => setTyped(e.target.value)}
+            onKeyDown={(e) => e.key === "Escape" && setTyped("")}
+          />
+          {typed && (
+            <button
+              className="absolute right-2 top-1/2 -translate-y-1/2 rounded px-2 py-0.5 text-xs text-slate-400 hover:bg-white/10 hover:text-slate-200"
+              onClick={() => setTyped("")}
+            >
+              clear
+            </button>
+          )}
+        </div>
+        {search && (
+          <span className="text-xs text-slate-400">
+            {total === 0 ? "nothing matches" : `${total} match${total === 1 ? "" : "es"}`}
+          </span>
+        )}
+      </div>
+
       <div className="flex flex-wrap items-center gap-2">
         {FILTERS.map((f) => (
           <button
@@ -255,8 +293,19 @@ export function Storyboard({
       </div>
 
       {scenes.length === 0 ? (
-        <Empty title={loading ? "Loading scenes…" : "No scenes match that filter"}>
-          {!loading && "Split a script into scenes to see them here."}
+        <Empty
+          title={
+            loading
+              ? "Loading scenes…"
+              : search
+                ? `Nothing matches "${search}"`
+                : "No scenes match that filter"
+          }
+        >
+          {!loading &&
+            (search
+              ? "The search looks at the narration, the image brief and the search terms that found each picture."
+              : "Split a script into scenes to see them here.")}
         </Empty>
       ) : (
         <>
@@ -416,9 +465,16 @@ function SceneCard({
   }, [position]);
 
   const save = async () => {
-    await api.patch(`/api/scenes/${scene.id}`, { text });
-    setDirty(false);
-    onChanged();
+    setProblem("");
+    try {
+      await api.patch(`/api/scenes/${scene.id}`, { text });
+      setDirty(false);
+      onChanged();
+    } catch (err) {
+      // Clearing the dirty flag on a failed save would tell you the edit was
+      // stored when it was not.
+      setProblem(`Could not save that edit: ${(err as Error).message}`);
+    }
   };
 
   const retake = async () => {
@@ -539,8 +595,13 @@ function SceneCard({
               value={scene.audio_mode}
               title="What happens to the clip's own sound"
               onChange={async (e) => {
-                await api.patch(`/api/scenes/${scene.id}`, { audio_mode: e.target.value });
-                onChanged();
+                setProblem("");
+                try {
+                  await api.patch(`/api/scenes/${scene.id}`, { audio_mode: e.target.value });
+                  onChanged();
+                } catch (err) {
+                  setProblem((err as Error).message);
+                }
               }}
             >
               <option value="narration">clip muted · voiceover only</option>

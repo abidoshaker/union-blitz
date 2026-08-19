@@ -174,6 +174,7 @@ def build_master(
     target_lufs: float | None = None,
     total_sec: float | None = None,
     on_progress=None,
+    should_stop=None,
 ) -> Path:
     """Narration, plus ducked music and ducked clip ambience, to one AAC track.
 
@@ -242,5 +243,6 @@ def build_master(
     if total_sec:
         args += ["-t", f"{total_sec:.3f}"]
     args += ["-c:a", "aac", "-b:a", "192k", "-ar", str(SAMPLE_RATE), str(dest)]
-    ffmpeg.run(args, on_progress=on_progress, total_sec=total_sec)
+    ffmpeg.run(args, on_progress=on_progress, total_sec=total_sec,
+               should_stop=should_stop)
     return dest

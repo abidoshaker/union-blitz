@@ -7,10 +7,12 @@ the final concat a stream copy instead of a second full re-encode.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import re
 import shlex
 import subprocess
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
@@ -94,12 +96,18 @@ def run(
     total_sec: float | None = None,
     timeout: float | None = None,
     loglevel: str = "error",
+    should_stop: Callable[[], None] | None = None,
 ) -> str:
     """Run ffmpeg. Returns stderr; raises FFmpegError on failure.
 
     `loglevel` matters more than it looks: the measurement filters - loudnorm's
     JSON summary and volumedetect's levels - print at info level, so a caller
     that needs to read them back must ask for it.
+
+    `should_stop` is what makes Cancel mean cancel. Encoding a single scene can
+    run for a minute, and a job that only checks between scenes leaves the
+    button saying "cancelling" for all of it. This raises out of the wait, and
+    kills ffmpeg on the way, so the wait is at most a quarter of a second.
     """
     exe = settings.ffmpeg
     if not exe:
@@ -114,20 +122,59 @@ def run(
         stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True,
     )
     stderr_parts: list[str] = []
-    if on_progress and total_sec and proc.stderr is not None:
-        for line in proc.stderr:
-            stderr_parts.append(line)
-            m = re.match(r"out_time_us=(\d+)", line.strip())
-            if m:
-                on_progress(min(1.0, int(m.group(1)) / 1e6 / max(total_sec, 0.001)))
-        proc.wait(timeout=timeout)
-        stderr = "".join(stderr_parts)
-    else:
-        _, stderr = proc.communicate(timeout=timeout)
+    try:
+        if on_progress and total_sec and proc.stderr is not None:
+            for line in proc.stderr:
+                stderr_parts.append(line)
+                m = re.match(r"out_time_us=(\d+)", line.strip())
+                if m:
+                    on_progress(min(1.0, int(m.group(1)) / 1e6 / max(total_sec, 0.001)))
+                if should_stop:
+                    should_stop()
+            _wait(proc, timeout=timeout, should_stop=should_stop)
+            stderr = "".join(stderr_parts)
+        elif should_stop:
+            _wait(proc, timeout=timeout, should_stop=should_stop)
+            stderr = proc.stderr.read() if proc.stderr else ""
+        else:
+            _, stderr = proc.communicate(timeout=timeout)
+    except BaseException:
+        _kill(proc)
+        raise
 
     if proc.returncode != 0:
         raise FFmpegError(cmd, proc.returncode, stderr or "")
     return stderr or ""
+
+
+def _wait(proc: subprocess.Popen, *, timeout: float | None,
+          should_stop: Callable[[], None] | None) -> None:
+    """Wait for ffmpeg, asking every 250 ms whether we still want it."""
+    deadline = None if timeout is None else time.monotonic() + timeout
+    while True:
+        if should_stop:
+            should_stop()
+        try:
+            proc.wait(timeout=0.25)
+            return
+        except subprocess.TimeoutExpired:
+            pass
+        if deadline is not None and time.monotonic() > deadline:
+            _kill(proc)
+            raise subprocess.TimeoutExpired(proc.args, timeout or 0)
+
+
+def _kill(proc: subprocess.Popen) -> None:
+    """Ask, then insist. A half-written output file is cleaned up by -y later."""
+    if proc.poll() is not None:
+        return
+    proc.terminate()
+    try:
+        proc.wait(timeout=3)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        with contextlib.suppress(Exception):
+            proc.wait(timeout=3)
 
 
 def probe(path: str | Path) -> dict:

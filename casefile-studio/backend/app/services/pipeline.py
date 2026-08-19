@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from sqlmodel import select
 
@@ -18,7 +18,7 @@ from ..config import settings
 from ..db import session_scope
 from ..models import Asset, Chapter, Project, RenderOutput, Scene, Script
 from ..providers.tts import TTSOpts
-from ..queue.base import JobContext
+from ..queue.base import JobCanceled, JobContext, JobPaused
 from . import audio as audio_service
 from . import (
     align_service, image_service, query, render_service, segmentation, speech,
@@ -37,6 +37,11 @@ DEFAULTS: dict[str, Any] = {
     "spoken_numbers": True,           # 1991 -> "nineteen ninety-one"
     "trim_takes": True,               # cut the padding providers leave on
     "llm_provider": None,
+    # Where pictures come from. `image_sources` is a list so a project can draw
+    # on several libraries at once; `visual_source` is the single-source form
+    # kept for projects saved before the list existed. Same for clips.
+    "image_sources": [],
+    "video_sources": [],
     "visual_source": "placeholder",
     "image_pool_per_chapter": 8,
     # Sourcing behaviour
@@ -325,10 +330,17 @@ def handle_images(ctx: JobContext) -> dict[str, Any]:
 
         try:
             if row["id"] in wanted_video:
-                _source_video_for(project_id, row, cfg, used_urls, counts)
+                _source_video_for(project_id, row, cfg, used_urls, counts,
+                                  stop=ctx.check_stop)
             else:
-                _source_image_for(project_id, row, cfg, used_urls, counts, pools)
+                _source_image_for(project_id, row, cfg, used_urls, counts, pools,
+                                  stop=ctx.check_stop)
             ctx.mark_done("images", str(row["id"]))
+        except (JobCanceled, JobPaused):
+            # Sourcing one scene reaches the network and ffmpeg, both of which
+            # now raise straight out on cancel. That is the signal to stop the
+            # whole job, not a scene that failed to find a picture.
+            raise
         except Exception as exc:
             failures.append(f"scene {row['order'] + 1}: {exc}")
             log.warning("sourcing failed for scene %s: %s", row["id"], exc)
@@ -359,35 +371,51 @@ def _plan_video_scenes(rows: list[dict], cfg: dict[str, Any]) -> set[int]:
 
 
 def _source_video_for(project_id: int, row: dict, cfg: dict[str, Any],
-                      used: set[str], counts: dict[str, int]) -> None:
+                      used: set[str], counts: dict[str, int],
+                      stop: Callable[[], None] | None = None) -> None:
     from ..providers import video as video_providers
 
-    provider = video_providers.get_provider(str(cfg.get("video_provider") or "pexels_video"))
-    usable, reason = provider.available()
-    if not usable:
-        raise RuntimeError(reason)
+    def check() -> None:
+        if stop:
+            stop()
 
     queries = query.build(row["text"], row["prompt"])
     needed = max(4.0, float(row["duration"] or 8.0))
 
     candidate = None
     chosen_query = ""
-    for term in queries.ladder(prefer_archival=provider.is_archival)[:5]:
-        try:
-            results = provider.search(term, count=10)
-        except Exception as exc:
-            log.debug("video search %r failed: %s", term, exc)
+    provider = None
+    tried: list[str] = []
+
+    for name in _rotate(video_sources(cfg), int(row.get("order", 0))):
+        check()
+        provider = video_providers.get_provider(name)
+        usable, reason = provider.available()
+        if not usable:
+            tried.append(f"{name} ({reason})")
             continue
-        candidate = query.pick(results, query=term, used=used)
+        for term in queries.ladder(prefer_archival=provider.is_archival)[:5]:
+            check()
+            try:
+                results = provider.search(term, count=10)
+            except Exception as exc:
+                log.debug("video search %r on %s failed: %s", term, name, exc)
+                continue
+            candidate = query.pick(results, query=term, used=used)
+            if candidate:
+                chosen_query = term
+                break
+        tried.append(name)
         if candidate:
-            chosen_query = term
             break
-    if candidate is None:
-        raise RuntimeError("no video results for any query in the ladder")
+
+    if candidate is None or provider is None:
+        raise RuntimeError("no clips came back from " + (", ".join(tried) or "any source"))
 
     used.add(candidate.url)
+    check()
     stored = video_service.store_candidate(
-        project_id, candidate, target_width=int(cfg["width"])
+        project_id, candidate, target_width=int(cfg["width"]), should_stop=stop,
     )
 
     audio_mode = "narration"
@@ -439,27 +467,101 @@ def _source_video_for(project_id: int, row: dict, cfg: dict[str, Any],
     counts["videos"] += 1
 
 
+def image_sources(cfg: dict[str, Any]) -> list[str]:
+    """Which still libraries this project may draw on, in order of preference.
+
+    Stored as a list so a project can say "Pexels and Pixabay and the National
+    Archives" rather than picking one and living with it. A project saved
+    before the list existed still has `visual_source`, so that is the fallback
+    and old projects keep working untouched.
+    """
+    chosen = cfg.get("image_sources")
+    if isinstance(chosen, str):
+        chosen = [chosen]
+    names = [str(n) for n in (chosen or []) if str(n).strip()]
+    if not names:
+        names = [str(cfg.get("visual_source") or "placeholder")]
+    return list(dict.fromkeys(names))
+
+
+def video_sources(cfg: dict[str, Any]) -> list[str]:
+    """The same, for motion."""
+    chosen = cfg.get("video_sources")
+    if isinstance(chosen, str):
+        chosen = [chosen]
+    names = [str(n) for n in (chosen or []) if str(n).strip()]
+    if not names:
+        names = [str(cfg.get("video_provider") or "pexels_video")]
+    return list(dict.fromkeys(names))
+
+
+def _always_succeeds(name: str) -> bool:
+    """Does this source produce something no matter what was asked for?
+
+    An AI generator and the offline placeholder card always return an image.
+    Rotating one of those to the front of the list would mean it answers first
+    for a third of the scenes and the archives are never asked at all - the
+    opposite of why several sources were selected.
+    """
+    from ..providers.image import get_provider
+
+    try:
+        return get_provider(name).kind == "ai"
+    except Exception:
+        return False
+
+
+def _rotate(names: list[str], seed: int) -> list[str]:
+    """Start each scene on a different source, keeping fallbacks last.
+
+    Trying them in the same order every time means the first one supplies
+    almost every scene, and a hundred consecutive Pexels frames look like a
+    hundred consecutive Pexels frames. Generators are pinned to the end
+    regardless, because they cannot fail and so would end the search.
+    """
+    searchable = [n for n in names if not _always_succeeds(n)]
+    fallbacks = [n for n in names if _always_succeeds(n)]
+    if len(searchable) > 1:
+        offset = seed % len(searchable)
+        searchable = searchable[offset:] + searchable[:offset]
+    return searchable + fallbacks
+
+
 def _source_image_for(project_id: int, row: dict, cfg: dict[str, Any],
-                      used: set[str], counts: dict[str, int], pools: dict) -> None:
+                      used: set[str], counts: dict[str, int], pools: dict,
+                      stop: Callable[[], None] | None = None) -> None:
     from ..providers.image import ARCHIVAL_PROVIDERS, get_provider
+
+    def check() -> None:
+        if stop:
+            stop()
 
     queries = query.build(row["text"], row["prompt"])
     # A scene naming a person, a place or a year is worth asking an archive
     # about even when it is not flagged as a person. "Cartagena 1991" is a real
     # lead; sending it straight to a stock library guarantees generic B-roll.
     wants_archive = row["real"] or queries.has_strong_subject
+    selected = _rotate(image_sources(cfg), int(row.get("order", 0)))
 
     plan: list[tuple[str, bool]] = []      # (provider name, archival attempt)
     if wants_archive:
-        preferred = str(cfg.get("archival_source") or "")
-        names = (preferred,) + ARCHIVAL_PROVIDERS if preferred else ARCHIVAL_PROVIDERS
-        for name in dict.fromkeys(names):
+        # Prefer the archives the user actually chose. If they chose none, a
+        # real-person scene still has to go somewhere archival - AI is blocked
+        # for it and a stock library is the wrong answer - so fall back to the
+        # full archival order for those.
+        preferred = [n for n in selected if n in ARCHIVAL_PROVIDERS]
+        if not preferred and row["real"]:
+            preferred = list(ARCHIVAL_PROVIDERS)
+        for name in dict.fromkeys([str(cfg.get("archival_source") or ""), *preferred]):
             if name and get_provider(name).available()[0]:
                 plan.append((name, True))
                 if len(plan) >= 3:
                     break
     if not row["real"]:
-        plan.append((str(cfg["visual_source"]), False))
+        # Everything the user picked, tried in turn. The archival ones already
+        # above are not repeated as plain searches unless nothing else exists.
+        rest = [n for n in selected if not any(n == p for p, _a in plan)]
+        plan += [(name, False) for name in (rest or selected)]
 
     if not plan:
         raise RuntimeError("no image source is configured or available")
@@ -467,8 +569,15 @@ def _source_image_for(project_id: int, row: dict, cfg: dict[str, Any],
     stored = None
     matched_term, match_level = "", query.MATCH_FILLER
 
+    tried: list[str] = []
     for provider_name, archival in plan:
+        check()
         provider = get_provider(provider_name)
+        usable, reason = provider.available()
+        if not usable:
+            tried.append(f"{provider_name} ({reason})")
+            continue
+
         if provider.kind == "ai":
             stored = image_service.source_image(
                 project_id=project_id, prompt=row["prompt"], provider_name=provider_name,
@@ -482,6 +591,7 @@ def _source_image_for(project_id: int, row: dict, cfg: dict[str, Any],
         # something worse than a stock library would.
         terms = queries.archival[:3] if archival else queries.ladder(prefer_archival=False)[:5]
         for term in terms:
+            check()
             try:
                 results = provider.search(term, count=12)
             except Exception as exc:
@@ -490,15 +600,19 @@ def _source_image_for(project_id: int, row: dict, cfg: dict[str, Any],
             candidate = query.pick(results, query=term, used=used)
             if candidate:
                 used.add(candidate.url)
+                check()
                 stored = image_service.store_candidate(project_id, candidate)
                 matched_term = term
                 match_level = query.MATCH_SUBJECT if archival else queries.classify(term)
                 break
+        tried.append(provider_name)
         if stored:
             break
 
     if stored is None:
-        raise RuntimeError("no image results for any query in the ladder")
+        raise RuntimeError(
+            "nothing came back from " + (", ".join(tried) or "any source")
+        )
     if match_level == query.MATCH_SUBJECT:
         counts["subject_hits"] = counts.get("subject_hits", 0) + 1
 
@@ -743,13 +857,15 @@ def handle_render(ctx: JobContext) -> dict[str, Any]:
         target_lufs=float(cfg["loudness_lufs"]),
         total_sec=timeline.total,
         on_progress=lambda f: ctx.progress(0.83 + f * 0.06, "mixing audio"),
+        should_stop=ctx.check_stop,
     )
 
     # --- 5. stream-copy assembly ----------------------------------------
     ctx.progress(0.90, "assembling the final file", force=True)
     suffix = "full" if chapter_id is None else f"chapter{chapter_id}"
     out_path = renders / f"{suffix}_{opts.height}p.mp4"
-    render_service.concat_clips(clips, out_path, audio=master_audio)
+    render_service.concat_clips(clips, out_path, audio=master_audio,
+                                should_stop=ctx.check_stop)
 
     # --- 6. sidecars -----------------------------------------------------
     ctx.progress(0.96, "writing chapters and captions", force=True)

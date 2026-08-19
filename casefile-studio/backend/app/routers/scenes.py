@@ -83,11 +83,24 @@ def list_scenes(
     limit: int = Query(60, ge=1, le=200),
     chapter_id: int | None = None,
     filter: str = Query("", description="needs_image|needs_audio|real_person|ready|error"),
+    q: str = Query("", description="words to find in the narration or the image brief"),
     session: Session = Depends(get_session),
 ) -> dict[str, Any]:
     stmt = select(Scene).where(Scene.project_id == project_id)
     if chapter_id is not None:
         stmt = stmt.where(Scene.chapter_id == chapter_id)
+
+    # Searching on the server, not in the loaded page: on a 240-scene project
+    # the browser holds 60 of them, so filtering client-side would only ever
+    # find the line you had already scrolled to.
+    needle = q.strip()
+    if needle:
+        like = f"%{needle}%"
+        stmt = stmt.where(
+            Scene.text.ilike(like)
+            | Scene.image_prompt.ilike(like)
+            | Scene.source_query.ilike(like)
+        )
     if filter == "needs_image":
         stmt = stmt.where(Scene.asset_id.is_(None))
     elif filter == "needs_audio":

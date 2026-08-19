@@ -1,5 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { JobBar, JobHistory } from "../components/JobBar";
+import { BatchBar } from "../components/BatchBar";
+import { SourcePicker, useProviders } from "../components/SourcePicker";
 import { NarrationPanel } from "../components/NarrationPanel";
 import { OutputPanel } from "../components/OutputPanel";
 import { Storyboard } from "../components/Storyboard";
@@ -18,27 +20,15 @@ import { useJobs } from "../lib/useJobs";
 
 type Tab = "script" | "storyboard" | "render";
 
-interface BatchBody {
-  project_id: number;
-  scene_ids: number[];
-  op: string;
-  payload: Record<string, unknown>;
-}
-
-interface BatchPreview {
-  op: string;
-  scene_count: number;
-  affected: number;
-  estimated_cost_usd: number;
-  changes: Array<Record<string, unknown>>;
-  truncated: boolean;
-}
-
 export function Workspace({ projectId, onBack }: { projectId: number; onBack: () => void }) {
   const [tab, setTab] = useState<Tab>("script");
   const [project, setProject] = useState<Project | null>(null);
   const [chapters, setChapters] = useState<Chapter[]>([]);
   const [selected, setSelected] = useState<Set<number>>(new Set());
+  // Which stage the script page kicked off, so we can move the user to the
+  // storyboard the moment it lands rather than leaving them on a page whose
+  // work is finished.
+  const [awaiting, setAwaiting] = useState("");
   const { active, jobs, refresh } = useJobs(projectId);
 
   const load = useCallback(async () => {
@@ -54,6 +44,17 @@ export function Workspace({ projectId, onBack }: { projectId: number; onBack: ()
   useEffect(() => {
     if (active.length === 0) load();
   }, [active.length, load]);
+
+  // Splitting a script is the end of the script page's job. When it finishes,
+  // the next thing to do is on the storyboard, so go there.
+  useEffect(() => {
+    if (!awaiting || active.length > 0) return;
+    const finished = jobs.find((j) => j.type === awaiting && j.status === "done");
+    if (finished) {
+      setAwaiting("");
+      setTab(awaiting === "render" ? "render" : "storyboard");
+    }
+  }, [awaiting, active.length, jobs]);
 
   if (!project) return <Empty title="Loading project…" />;
 
@@ -82,7 +83,14 @@ export function Workspace({ projectId, onBack }: { projectId: number; onBack: ()
 
       <JobBar jobs={active} onChange={refresh} />
 
-      {tab === "script" && <ScriptTab project={project} onRan={refresh} onSaved={load} />}
+      {tab === "script" && (
+        <ScriptTab
+          project={project}
+          onRan={refresh}
+          onSaved={load}
+          onStarted={(stage) => setAwaiting(stage)}
+        />
+      )}
       {tab === "storyboard" && (
         <StoryboardTab
           project={project}
@@ -94,7 +102,13 @@ export function Workspace({ projectId, onBack }: { projectId: number; onBack: ()
         />
       )}
       {tab === "render" && (
-        <RenderTab project={project} chapters={chapters} onRan={refresh} onChanged={load} />
+        <RenderTab
+          project={project}
+          chapters={chapters}
+          onRan={refresh}
+          onChanged={load}
+          onDeleted={onBack}
+        />
       )}
 
       <JobHistory jobs={jobs} />
@@ -108,10 +122,12 @@ function ScriptTab({
   project,
   onRan,
   onSaved,
+  onStarted,
 }: {
   project: Project;
   onRan: () => void;
   onSaved: () => void;
+  onStarted: (stage: string) => void;
 }) {
   const [text, setText] = useState("");
   const [stats, setStats] = useState({ word_count: 0, estimated_runtime_sec: 0 });
@@ -148,6 +164,7 @@ function ScriptTab({
   const run = async (stage: string) => {
     await save();
     await api.post(`/api/projects/${project.id}/run/${stage}`, {});
+    onStarted(stage === "build" ? "render" : stage);
     onRan();
   };
 
@@ -217,23 +234,6 @@ function StoryboardTab({
   onRan: () => void;
   onChanged: () => void;
 }) {
-  const [preview, setPreview] = useState<(BatchPreview & { body: BatchBody }) | null>(null);
-
-  const batch = async (op: string, payload: Record<string, unknown> = {}) => {
-    const body: BatchBody = { project_id: project.id, scene_ids: [...selected], op, payload };
-    const result = await api.post<BatchPreview>("/api/batch/preview", body);
-    setPreview({ ...result, body });
-  };
-
-  const apply = async () => {
-    if (!preview) return;
-    await api.post("/api/batch/apply", preview.body);
-    setPreview(null);
-    setSelected(new Set());
-    onRan();
-    onChanged();
-  };
-
   return (
     <div className="space-y-4">
       <div className="grid gap-3 sm:grid-cols-4">
@@ -250,49 +250,15 @@ function StoryboardTab({
       <NarrationPanel project={project} onSaved={onChanged} />
       <SourcingPanel project={project} onSaved={onChanged} />
 
-      <div className="card flex flex-wrap items-center gap-2 p-3">
-        <span className="text-sm text-slate-400">
-          {selected.size > 0 ? `${selected.size} selected` : "Select scenes for a batch action"}
-        </span>
-        <div className="ml-auto flex flex-wrap gap-2">
-          <button className="btn-ghost" onClick={() => api.post(`/api/projects/${project.id}/run/narrate`, {}).then(onRan)}>
-            Narrate all
-          </button>
-          <button className="btn-ghost" onClick={() => api.post(`/api/projects/${project.id}/run/images`, {}).then(onRan)}>
-            Source all images
-          </button>
-          <button className="btn-ghost" disabled={!selected.size} onClick={() => batch("regenerate-audio")}>
-            Re-record selected
-          </button>
-          <button className="btn-ghost" disabled={!selected.size} onClick={() => batch("swap-images")}>
-            Swap images
-          </button>
-        </div>
-      </div>
-
-      {preview && (
-        <div className="card p-4">
-          <div className="flex items-center gap-3">
-            <h3 className="text-[15px]">Confirm batch</h3>
-            <Pill tone="amber">{preview.op}</Pill>
-            <div className="ml-auto flex gap-2">
-              <button className="btn-ghost" onClick={() => setPreview(null)}>
-                Cancel
-              </button>
-              <button className="btn-primary" onClick={apply}>
-                {preview.estimated_cost_usd > 0
-                  ? `Apply to ${preview.affected} scenes — $${preview.estimated_cost_usd.toFixed(2)}`
-                  : `Apply to ${preview.affected} scenes`}
-              </button>
-            </div>
-          </div>
-          {preview.estimated_cost_usd > 0 && (
-            <p className="mt-2 text-sm text-amber">
-              This will spend about ${preview.estimated_cost_usd.toFixed(2)} with your narration provider.
-            </p>
-          )}
-        </div>
-      )}
+      <BatchBar
+        project={project}
+        selected={selected}
+        onRan={onRan}
+        onChanged={() => {
+          setSelected(new Set());
+          onChanged();
+        }}
+      />
 
       <Storyboard
         projectId={project.id}
@@ -308,6 +274,17 @@ function StoryboardTab({
 function SourcingPanel({ project, onSaved }: { project: Project; onSaved: () => void }) {
   const [cfg, setCfg] = useState<Json>(project.settings ?? {});
   const [saving, setSaving] = useState(false);
+  const providers = useProviders();
+  // A project saved before these lists existed still has the single
+  // `visual_source` / `video_provider`, so seed from those.
+  const [imageSources, setImageSources] = useState<string[]>(
+    (project.settings?.image_sources as string[]) ??
+      (project.settings?.visual_source ? [String(project.settings.visual_source)] : []),
+  );
+  const [videoSources, setVideoSources] = useState<string[]>(
+    (project.settings?.video_sources as string[]) ??
+      (project.settings?.video_provider ? [String(project.settings.video_provider)] : []),
+  );
 
   const set = (key: string, value: unknown) => setCfg((c) => ({ ...c, [key]: value }));
 
@@ -333,6 +310,33 @@ function SourcingPanel({ project, onSaved }: { project: Project; onSaved: () => 
         </button>
       </div>
 
+      {/* Any combination, not one and only one — a scene is better served by
+          asking four libraries than by betting the video on Pexels. */}
+      <div className="mb-4 space-y-3">
+        <SourcePicker
+          label="Where stills come from"
+          hint="tried in turn until one has something"
+          providers={providers?.images ?? []}
+          selected={imageSources}
+          onChange={(next) => {
+            setImageSources(next);
+            set("image_sources", next);
+          }}
+          showAi
+        />
+        {cfg.video_enabled && (
+          <SourcePicker
+            label="Where clips come from"
+            providers={providers?.video ?? []}
+            selected={videoSources}
+            onChange={(next) => {
+              setVideoSources(next);
+              set("video_sources", next);
+            }}
+          />
+        )}
+      </div>
+
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <label className="block">
           <span className="label">Motion footage</span>
@@ -343,19 +347,6 @@ function SourcingPanel({ project, onSaved }: { project: Project; onSaved: () => 
           >
             <option value="off">Stills only</option>
             <option value="on">Mix in video clips</option>
-          </select>
-        </label>
-
-        <label className="block">
-          <span className="label">Clip source</span>
-          <select
-            className="input"
-            value={String(cfg.video_provider ?? "pexels_video")}
-            onChange={(e) => set("video_provider", e.target.value)}
-          >
-            <option value="pexels_video">Pexels — B-roll</option>
-            <option value="pixabay_video">Pixabay — B-roll</option>
-            <option value="internet_archive">Internet Archive — archival</option>
           </select>
         </label>
 
@@ -415,17 +406,22 @@ function RenderTab({
   chapters,
   onRan,
   onChanged,
+  onDeleted,
 }: {
   project: Project;
   chapters: Chapter[];
   onRan: () => void;
   onChanged: () => void;
+  onDeleted: () => void;
 }) {
   const [check, setCheck] = useState<Preflight | null>(null);
   const [renders, setRenders] = useState<any[]>([]);
   const [usage, setUsage] = useState<Json | null>(null);
   const [playing, setPlaying] = useState<any>(null);
-  const [confirm, setConfirm] = useState<null | { kind: "render" | "clear" | "wipe"; id?: number }>(null);
+  const [confirm, setConfirm] = useState<
+    null | { kind: "render" | "clear" | "wipe" | "delete"; id?: number }
+  >(null);
+  const [problem, setProblem] = useState("");
   const [busy, setBusy] = useState(false);
 
   const load = useCallback(async () => {
@@ -438,8 +434,26 @@ function RenderTab({
     load();
   }, [load]);
 
+  // A refused start - no chapters yet, preflight unhappy - has to be visible.
+  // Firing and forgetting reads as "the button does nothing".
+  const start = async (path: string) => {
+    setProblem("");
+    try {
+      await api.post(`/api/projects/${project.id}/${path}`, {});
+      onRan();
+      load();
+    } catch (err) {
+      setProblem((err as Error).message);
+    }
+  };
+
   return (
     <div className="space-y-4">
+      {problem && (
+        <Banner tone="danger" title="Could not start that">
+          {problem}
+        </Banner>
+      )}
       {check && (
         <>
           <div className="grid gap-3 sm:grid-cols-4">
@@ -485,24 +499,14 @@ function RenderTab({
         <button
           className="btn-amber"
           disabled={chapters.length === 0}
-          onClick={() =>
-            api.post(`/api/projects/${project.id}/render/preview`, {}).then(() => {
-              onRan();
-              load();
-            })
-          }
+          onClick={() => start("render/preview")}
         >
           Preview render · first chapter
         </button>
         <button
           className="btn-primary ml-auto"
           disabled={!check?.ok}
-          onClick={() =>
-            api.post(`/api/projects/${project.id}/run/render`, {}).then(() => {
-              onRan();
-              load();
-            })
-          }
+          onClick={() => start("run/render")}
         >
           Render the full video
         </button>
@@ -559,8 +563,13 @@ function RenderTab({
               <button className="btn-ghost" onClick={() => setConfirm({ kind: "clear" })}>
                 Free up space
               </button>
-              <button className="btn-danger" onClick={() => setConfirm({ kind: "wipe" })}>
+              <button className="btn-ghost" onClick={() => setConfirm({ kind: "wipe" })}>
                 Clear everything
+              </button>
+              {/* Deleting belongs here as well as on the projects list: when a
+                  video is finished you are on this page, not that one. */}
+              <button className="btn-danger" onClick={() => setConfirm({ kind: "delete" })}>
+                Delete this project
               </button>
             </div>
           </div>
@@ -569,7 +578,9 @@ function RenderTab({
             previews only — they rebuild themselves on the next render, and your finished videos and
             downloaded footage are untouched.{" "}
             <strong className="text-slate-400">Clear everything</strong> also removes the finished
-            videos and every downloaded image and clip, leaving the script and scene list.
+            videos and every downloaded image and clip, leaving the script and scene list.{" "}
+            <strong className="text-slate-400">Delete this project</strong> removes the lot,
+            including the script.
           </p>
         </div>
       )}
@@ -601,7 +612,9 @@ function RenderTab({
               ? "Delete this video?"
               : confirm.kind === "clear"
                 ? "Free up space?"
-                : "Clear everything?"
+                : confirm.kind === "delete"
+                  ? `Delete "${project.title}"?`
+                  : "Clear everything?"
           }
           danger={confirm.kind !== "clear"}
           busy={busy}
@@ -610,7 +623,9 @@ function RenderTab({
               ? "Delete the video"
               : confirm.kind === "clear"
                 ? "Delete the scene clips"
-                : "Delete videos and downloads"
+                : confirm.kind === "delete"
+                  ? "Delete the project"
+                  : "Delete videos and downloads"
           }
           body={
             confirm.kind === "render" ? (
@@ -620,6 +635,12 @@ function RenderTab({
                 Removes scene clips and previews — about{" "}
                 {formatBytes(Number(usage?.clip_bytes ?? 0) + Number(usage?.preview_bytes ?? 0))}.
                 They rebuild on the next render. Nothing else is touched.
+              </>
+            ) : confirm.kind === "delete" ? (
+              <>
+                The script, all {project.scene_count} scenes, every finished video and everything
+                downloaded for it — about {formatBytes(Number(usage?.total_bytes ?? 0))}. Anything
+                still running is stopped first. It cannot be undone.
               </>
             ) : (
               <>
@@ -635,6 +656,10 @@ function RenderTab({
             try {
               if (confirm.kind === "render") {
                 await api.del(`/api/renders/${confirm.id}`);
+              } else if (confirm.kind === "delete") {
+                await api.del(`/api/projects/${project.id}`);
+                onDeleted();
+                return;
               } else {
                 await api.post(`/api/projects/${project.id}/clear`, {
                   drop_renders: confirm.kind === "wipe",

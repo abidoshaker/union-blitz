@@ -149,6 +149,7 @@ def render_scene_clip(
     opts: RenderOpts,
     *,
     force: bool = False,
+    should_stop: Callable[[], None] | None = None,
 ) -> tuple[Path, bool]:
     """Render (or reuse) one clip. Returns (path, was_cached)."""
     workdir.mkdir(parents=True, exist_ok=True)
@@ -293,7 +294,9 @@ def render_scene_clip(
         "-an",
         tmp.name,
     ]
-    ffmpeg.run(args, cwd=workdir)
+    # Encoding one scene is seconds to a minute. Without this the cancel
+    # button waits out whichever clip happened to be in flight.
+    ffmpeg.run(args, cwd=workdir, should_stop=should_stop)
     tmp.replace(clip)
     return clip, False
 
@@ -318,7 +321,7 @@ def render_scene_clips(
     def work(spec: SceneSpec) -> tuple[int, Path]:
         if should_stop:
             should_stop()
-        path, _cached = render_scene_clip(spec, workdir, opts)
+        path, _cached = render_scene_clip(spec, workdir, opts, should_stop=should_stop)
         return spec.index, path
 
     with ThreadPoolExecutor(max_workers=max(1, workers)) as pool:
@@ -346,7 +349,8 @@ def render_scene_clips(
 # Assembly
 # ---------------------------------------------------------------------------
 
-def concat_clips(clips: Sequence[Path], dest: Path, *, audio: Path | None = None) -> Path:
+def concat_clips(clips: Sequence[Path], dest: Path, *, audio: Path | None = None,
+                 should_stop: Callable[[], None] | None = None) -> Path:
     """Stream-copy concat plus the single audio track.
 
     The concat demuxer, not the concat protocol, and never a 240-input
@@ -374,7 +378,7 @@ def concat_clips(clips: Sequence[Path], dest: Path, *, audio: Path | None = None
         args += ["-an"]
     args += ["-movflags", "+faststart", str(Path(dest).resolve())]
 
-    ffmpeg.run(args, cwd=workdir)
+    ffmpeg.run(args, cwd=workdir, should_stop=should_stop)
     listing.unlink(missing_ok=True)
     return dest
 

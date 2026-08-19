@@ -13,6 +13,7 @@ import json
 import logging
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Callable
 
 import httpx
 
@@ -52,8 +53,14 @@ def _video_dir(project_id: int) -> Path:
     return path
 
 
-def _download(url: str, dest: Path, max_bytes: int = MAX_DOWNLOAD_BYTES) -> None:
-    """Stream to disk, aborting if the source turns out to be enormous."""
+def _download(url: str, dest: Path, max_bytes: int = MAX_DOWNLOAD_BYTES,
+              should_stop: Callable[[], None] | None = None) -> None:
+    """Stream to disk, aborting if the source turns out to be enormous.
+
+    The stop check sits in the chunk loop because a 100 MB clip on a slow link
+    is a minute of downloading, and a Cancel that only lands between scenes
+    leaves the button saying "cancelling" for all of it.
+    """
     dest.parent.mkdir(parents=True, exist_ok=True)
     written = 0
     with httpx.Client(timeout=180, follow_redirects=True,
@@ -67,6 +74,8 @@ def _download(url: str, dest: Path, max_bytes: int = MAX_DOWNLOAD_BYTES) -> None
                 )
             with open(dest, "wb") as fh:
                 for chunk in resp.iter_bytes(1 << 20):
+                    if should_stop:
+                        should_stop()
                     written += len(chunk)
                     if written > max_bytes:
                         fh.close()
@@ -81,6 +90,7 @@ def store_candidate(
     *,
     max_seconds: float = MAX_CLIP_SEC,
     target_width: int | None = None,
+    should_stop: Callable[[], None] | None = None,
 ) -> StoredVideo:
     """Fetch, trim and normalise one clip. Cached by source URL."""
     if candidate.kind != "video":
@@ -99,8 +109,9 @@ def store_candidate(
     if not dest.exists():
         raw = directory / f".{digest}.raw"
         try:
-            _download(candidate.url, raw)
-            _normalise(raw, dest, max_seconds=max_seconds, target_width=target_width)
+            _download(candidate.url, raw, should_stop=should_stop)
+            _normalise(raw, dest, max_seconds=max_seconds, target_width=target_width,
+                       should_stop=should_stop)
         finally:
             raw.unlink(missing_ok=True)
 
@@ -126,7 +137,8 @@ def store_candidate(
     )
 
 
-def _normalise(src: Path, dest: Path, *, max_seconds: float, target_width: int) -> None:
+def _normalise(src: Path, dest: Path, *, max_seconds: float, target_width: int,
+               should_stop: Callable[[], None] | None = None) -> None:
     """One codec, one pixel format, sane size. Audio is kept if present."""
     tmp = dest.with_suffix(".tmp.mp4")
     args = [
@@ -142,7 +154,7 @@ def _normalise(src: Path, dest: Path, *, max_seconds: float, target_width: int) 
         str(tmp),
     ]
     try:
-        ffmpeg.run(args)
+        ffmpeg.run(args, should_stop=should_stop)
     except ffmpeg.FFmpegError:
         # Some archival sources have no audio track at all, which makes the
         # audio mapping above fail. Retry video-only.
@@ -154,7 +166,7 @@ def _normalise(src: Path, dest: Path, *, max_seconds: float, target_width: int) 
             ),
             "-c:v", "libx264", "-preset", "veryfast", "-crf", "20", "-an",
             "-movflags", "+faststart", str(tmp),
-        ])
+        ], should_stop=should_stop)
     tmp.replace(dest)
 
 

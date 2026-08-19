@@ -225,6 +225,46 @@ blur anything it missed by hand.
 | US National Archives | federal records and photographs (DEA, FBI, customs) | free key from catalog.archives.gov |
 | fal.ai or OpenAI images | optional AI B-roll | ~$0.03 per image |
 
+## Working on 200 scenes without scrolling
+
+* **Find a scene by its words.** The box above the storyboard searches the
+  narration, the image brief and the terms that found each picture — on the
+  server, so it reaches every scene and not just the 60 on screen.
+* **Filters and search stack.** "Generic B-roll" plus a search for a name
+  gives you the scenes about that person that got filler.
+* **Select, then act on just those.** Tick some scenes and the batch bar gains
+  **Pictures for these** and **Voice for these** — the whole point of
+  selecting five scenes is usually that those five need something different
+  from the rest.
+  * *Pictures* lets you pick which libraries to try for this batch only, and
+    whether to replace what is there or just fill in the empty ones. Filling
+    in never discards a picture you chose by hand.
+  * *Voice* re-records only those scenes, in a provider and voice you choose.
+    Pace and pauses stay the project's, so a retake still sits inside the rest
+    of the narration.
+
+## Choosing where pictures come from
+
+Sourcing is no longer one library at a time. In **Storyboard → Sourcing**,
+tick as many as you like — Pexels, Pixabay, Wikimedia, Internet Archive,
+Library of Congress, the National Archives — or press **use everything
+available**. The green dot marks an archive.
+
+Each scene walks the list until something comes back, and the **starting point
+rotates scene by scene**, so a hundred consecutive frames do not all come from
+whichever one happened to be first. Generators — AI images and the offline
+placeholder card — are always tried last, because they can never fail and
+would otherwise stop the search before an archive was ever asked.
+
+Clips work the same way when motion footage is switched on.
+
+## Deleting a project
+
+Two places, because when a video is finished you are inside it, not on the
+projects list: **Render → Delete this project**, or the Delete button on the
+project card. Either one stops anything still running first, then removes the
+script, the scenes, every finished video and everything downloaded.
+
 ## Where the pictures come from, and how to tell
 
 Every scene carries a badge saying what kind of picture it got:

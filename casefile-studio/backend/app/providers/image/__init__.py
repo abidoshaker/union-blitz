@@ -51,4 +51,14 @@ def all_providers() -> list[ImageProvider]:
 
 
 def describe_all() -> list[dict]:
-    return [p.describe() for p in all_providers()]
+    """Every still library, tagged with whether it is a record or a mood.
+
+    `is_archival` is the distinction the interface has to show: an archive may
+    hold the actual event, a stock library never does. It lives here rather
+    than on each adapter because it is a property of the ordering above, and
+    two lists that can disagree is one list too many.
+    """
+    return [
+        {**p.describe(), "is_archival": p.name in ARCHIVAL_PROVIDERS and p.kind != "ai"}
+        for p in all_providers()
+    ]

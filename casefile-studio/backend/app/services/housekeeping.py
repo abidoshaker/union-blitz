@@ -10,12 +10,14 @@ from __future__ import annotations
 
 import logging
 import shutil
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 from sqlmodel import Session, select
 
 from ..config import settings
+from ..db import session_scope
 from ..models import Asset, Chapter, Job, Project, RenderOutput, Scene, Script
 
 log = logging.getLogger("casefile.housekeeping")
@@ -151,11 +153,52 @@ def delete_render(session: Session, render_id: int) -> dict[str, int]:
     return {"freed_bytes": freed}
 
 
+def stop_jobs_for(project_id: int, *, timeout: float = 20.0) -> list[int]:
+    """Cancel this project's jobs and wait for the workers to let go.
+
+    Deleting the rows out from under a running handler does not stop it: it
+    keeps going and fails scene by scene on foreign-key errors, writing to a
+    project that no longer exists. Ask it to stop, then wait.
+    """
+    from ..main import job_queue      # the running singleton
+
+    stopped: list[int] = []
+    with session_scope() as session:
+        live = session.exec(
+            select(Job).where(Job.project_id == project_id,
+                              Job.status.in_(("queued", "running", "paused")))
+        ).all()
+        ids = [int(j.id) for j in live]
+
+    for job_id in ids:
+        if job_queue.cancel(job_id):
+            stopped.append(job_id)
+
+    deadline = time.monotonic() + timeout
+    while ids and time.monotonic() < deadline:
+        with session_scope() as session:
+            still = session.exec(
+                select(Job).where(Job.id.in_(ids),
+                                  Job.status.in_(("queued", "running")))
+            ).all()
+        if not still:
+            break
+        time.sleep(0.25)
+    return stopped
+
+
 def delete_project(session: Session, project_id: int) -> dict[str, int]:
     """Delete a project, everything it made, and everything it downloaded."""
     project = session.get(Project, project_id)
     if project is None:
         raise ValueError("Project not found.")
+
+    # Anything still running has to be told to stop first, or it carries on
+    # writing to a project that is being deleted underneath it.
+    stopped = stop_jobs_for(project_id)
+    if stopped:
+        log.info("stopped %d job(s) before deleting project %s", len(stopped), project_id)
+        session.expire_all()
 
     base = settings.project_dir(project_id)
     freed = _dir_size(base)

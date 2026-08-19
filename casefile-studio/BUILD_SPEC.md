@@ -319,6 +319,21 @@ width, height)`.
   indemnification), Unsplash (**must** send attribution and fire the
   download-tracking endpoint), Wikimedia Commons, Library of Congress,
   Internet Archive.
+- **Several sources at once (implemented).** `image_sources` and
+  `video_sources` are ordered lists rather than a single `visual_source` /
+  `video_provider`; the singular keys remain as the fallback so projects saved
+  before the lists keep working. `_rotate(names, scene_order)` shifts the
+  starting point per scene so one library does not supply the whole video —
+  **except** for providers whose `kind == "ai"`, which are pinned to the end of
+  every rotation. A generator cannot fail, so rotating one to the front would
+  end the search before any archive was asked, which is the opposite of why
+  several sources were selected.
+- **Cancellation reaches the work (implemented).** `ffmpeg.run` takes a
+  `should_stop` callable, polls it every 250 ms while waiting, and terminates
+  (then kills) the process on the way out. The same callable is threaded
+  through clip download, clip normalisation, per-scene clip rendering, the
+  master audio pass and the final concat. Measured on a 1080p `preset=slow`
+  render interrupted mid-encode: **23.7 s before, 1.3 s after**.
 - **Archive-first routing (implemented).** `ARCHIVAL_PROVIDERS` is ordered
   `nara, loc, wikimedia, internet_archive_image, pexels, pixabay`: US federal
   records first, because arrests, seizures and court exhibits in American
