@@ -66,8 +66,8 @@
 <body>
 
 <!-- AUDIO FILES -->
-<audio id="hitSound" src="/hit.mp3"></audio>
-<audio id="missSound" src="/miss.mp3"></audio>
+<audio id="hitSound" src="public/hit.mp3"></audio>
+<audio id="missSound" src="public/miss.mp3"></audio>
 
 <div id="startScreen">
   <h1>Union Blitz</h1>
@@ -100,7 +100,7 @@
   const missSound = document.getElementById("missSound");
 
   const targetImage = new Image();
-  targetImage.src = "/target.jpg"; // ✅ PUBLIC FOLDER
+  targetImage.src = "public/target.jpg"; // ✅ PUBLIC FOLDER
 
   let score = 0;
   let lives = 3;
